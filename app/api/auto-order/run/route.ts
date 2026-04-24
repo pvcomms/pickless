@@ -175,16 +175,57 @@ export async function POST(req: NextRequest) {
         } catch {}
       }
 
-      // Click "Add"
+      // Click "Add" — observe→diagnose→re-act on failure, max 2 retries
       let addClicked = false;
-      try {
-        await stagehand.act(preset.addItem(item.dish));
-        addClicked = true;
-      } catch (e) {
+      let addError: Error | null = null;
+      let addInstruction = preset.addItem(item.dish);
+
+      for (let attempt = 0; attempt <= 2; attempt++) {
+        try {
+          await stagehand.act(addInstruction);
+          addClicked = true;
+          break;
+        } catch (e) {
+          addError = e as Error;
+          if (attempt >= 2) break;
+
+          await appendStep(sessionId, {
+            kind: "info",
+            msg: `${tag}Add failed · observing page for retry ${attempt + 1}`,
+          });
+
+          try {
+            const diagnosis = await stagehand.extract(
+              `The action to add "${item.dish}" to cart just failed. Look at the current page and answer: ` +
+                `1) Is the dish card for "${item.dish}" visible anywhere? ` +
+                `2) Is any modal, overlay, or popup blocking the menu right now? ` +
+                `3) What is the exact text or label on the button that adds it to cart? ` +
+                `4) Write a single concrete action instruction that will add "${item.dish}" to the cart based strictly on what you can see right now.`,
+              z.object({
+                dishVisible: z.boolean(),
+                blockerPresent: z.boolean(),
+                blockerDescription: z.string().optional(),
+                addButtonLabel: z.string().optional(),
+                actionInstruction: z.string(),
+              }),
+            );
+            if (diagnosis?.blockerPresent) {
+              try {
+                await stagehand.act(preset.blockerDismiss);
+              } catch {}
+            }
+            if (diagnosis?.actionInstruction) {
+              addInstruction = diagnosis.actionInstruction;
+            }
+          } catch {}
+        }
+      }
+
+      if (!addClicked) {
         await appendStep(sessionId, {
           kind: "warn",
-          msg: `${tag}Add click failed for ${item.dish}`,
-          detail: (e as Error).message?.slice(0, 200),
+          msg: `${tag}Add failed for "${item.dish}" after 3 attempts`,
+          detail: addError?.message?.slice(0, 200),
         });
       }
 
