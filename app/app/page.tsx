@@ -303,10 +303,12 @@ export default function FeedMe() {
       if (!localStorage.getItem("pickless_saved_address")) {
         const parts = [data.neighborhood, data.city].filter(Boolean);
         if (parts.length) {
+          const derived = parts.join(", ");
           localStorage.setItem(
             "pickless_saved_address",
-            JSON.stringify(parts.join(", ")),
+            JSON.stringify(derived),
           );
+          setSavedAddressDisplay(derived);
         }
       }
     } catch {}
