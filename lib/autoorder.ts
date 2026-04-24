@@ -16,6 +16,7 @@ export type AutoOrderJobStatus =
   | "cart" // at least one item added to cart
   | "partial" // some items added, others failed (multi-item only)
   | "manual" // agent stopped, user must finish (login, payment, customization)
+  | "disconnected" // Browserbase session ended / released before agent finished
   | "failed";
 
 export type DishItem = {
@@ -40,6 +41,7 @@ export type AutoOrderJob = {
   // Full ordered list of items the agent will try to add. items[0] mirrors
   // dish/restaurant/orderUrl above.
   items: DishItem[];
+  savedAddress?: string;
   status: AutoOrderJobStatus;
   steps: Step[];
   startedAt: string;

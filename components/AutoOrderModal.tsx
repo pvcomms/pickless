@@ -1,15 +1,22 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { sfx } from "@/lib/sfx";
-import type { AutoOrderJob, Step } from "@/lib/autoorder";
+import type { AutoOrderJob, DishItem, Step } from "@/lib/autoorder";
 
 type Props = {
   open: boolean;
   userId: string;
-  dish: string;
-  restaurant: string;
+  // Either a single dish OR a list. Single is wrapped into a 1-item list.
+  dish?: string;
+  restaurant?: string;
+  orderUrl?: string;
+  items?: Array<
+    Pick<
+      DishItem,
+      "dish" | "restaurant" | "orderUrl" | "restaurantId" | "price"
+    >
+  >;
   platform: string;
-  orderUrl: string;
   onClose: () => void;
   onOrdered: () => void;
 };
@@ -25,7 +32,13 @@ type Session = {
   } | null;
 };
 
-const TERMINAL = new Set(["cart", "manual", "failed"]);
+const TERMINAL = new Set([
+  "cart",
+  "partial",
+  "manual",
+  "disconnected",
+  "failed",
+]);
 
 function statusBlurb(s?: AutoOrderJob["status"]): string {
   switch (s) {
@@ -36,9 +49,13 @@ function statusBlurb(s?: AutoOrderJob["status"]): string {
     case "acting":
       return "Agent is reading the menu";
     case "cart":
-      return "In your cart — take over to pay";
+      return "All items in cart — take over to pay";
+    case "partial":
+      return "Some items in cart — finish the rest live";
     case "manual":
       return "Agent paused — finish in the live view";
+    case "disconnected":
+      return "Session ended";
     case "failed":
       return "Agent hit a wall";
     default:
@@ -70,9 +87,20 @@ export function AutoOrderModal({
   restaurant,
   platform,
   orderUrl,
+  items,
   onClose,
   onOrdered,
 }: Props) {
+  // Normalize: prefer items[], else wrap single dish into 1-item list.
+  const effectiveItems =
+    items && items.length > 0
+      ? items
+      : dish && restaurant && orderUrl
+        ? [{ dish, restaurant, orderUrl }]
+        : [];
+  const isMulti = effectiveItems.length > 1;
+  const headerDish = effectiveItems[0]?.dish || dish || "";
+  const headerRestaurant = effectiveItems[0]?.restaurant || restaurant || "";
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<"idle" | "starting" | "live" | "error">(
     "idle",
@@ -90,15 +118,27 @@ export function AutoOrderModal({
     setState("starting");
     void (async () => {
       try {
+        const savedAddress = (() => {
+          try {
+            const raw = localStorage.getItem("pickless_saved_address");
+            if (raw) return JSON.parse(raw) as string;
+            const loc = localStorage.getItem("pickless_location");
+            if (loc) {
+              const l = JSON.parse(loc);
+              const parts = [l.neighborhood, l.city].filter(Boolean);
+              return parts.length ? parts.join(", ") : undefined;
+            }
+          } catch {}
+          return undefined;
+        })();
         const r = await fetch("/api/auto-order", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId,
-            dish,
-            restaurant,
             platform,
-            orderUrl,
+            items: effectiveItems,
+            ...(savedAddress ? { savedAddress } : {}),
           }),
         });
         const d = await r.json();
@@ -181,6 +221,9 @@ export function AutoOrderModal({
     state === "error" ? "Agent hit a wall" : statusBlurb(job?.status);
 
   const cartDone = job?.status === "cart";
+  const partialDone = job?.status === "partial";
+  const anyDone = cartDone || partialDone;
+  const jobItems = job?.items || [];
 
   return (
     <div
@@ -198,17 +241,40 @@ export function AutoOrderModal({
                 className={`w-1.5 h-1.5 rounded-full inline-block ${
                   cartDone
                     ? "bg-emerald-500"
-                    : job?.status === "failed"
-                      ? "bg-red-500"
-                      : job?.status === "manual"
-                        ? "bg-amber-500"
-                        : "bg-[var(--seal)] pulse-soft"
+                    : partialDone
+                      ? "bg-amber-500"
+                      : job?.status === "failed"
+                        ? "bg-red-500"
+                        : job?.status === "disconnected"
+                          ? "bg-amber-500"
+                          : job?.status === "manual"
+                            ? "bg-amber-500"
+                            : "bg-[var(--seal)] pulse-soft"
                 }`}
               />
               {headline}
+              {isMulti && (
+                <span className="opacity-60">
+                  · {effectiveItems.length}-item meal
+                </span>
+              )}
             </p>
             <p className="font-display text-lg tracking-tight truncate">
-              {dish} · <span className="faint">{restaurant}</span>
+              {isMulti ? (
+                <>
+                  {effectiveItems
+                    .map((it) => it.dish)
+                    .slice(0, 3)
+                    .join(" + ")}
+                  {effectiveItems.length > 3 ? " +…" : ""}{" "}
+                  <span className="faint">· {headerRestaurant}</span>
+                </>
+              ) : (
+                <>
+                  {headerDish} ·{" "}
+                  <span className="faint">{headerRestaurant}</span>
+                </>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -216,12 +282,12 @@ export function AutoOrderModal({
               <button
                 onClick={() => close(true)}
                 className={`font-mono text-[10px] uppercase tracking-widest px-4 py-2 rounded-sm transition-colors ${
-                  cartDone
+                  anyDone
                     ? "bg-[var(--seal)] text-white hover:opacity-90"
                     : "bg-[var(--ink)] text-[var(--bg)] hover:bg-[var(--seal)]"
                 }`}
               >
-                {cartDone ? "Mark ordered →" : "Mark ordered"}
+                {anyDone ? "Mark ordered →" : "Mark ordered"}
               </button>
             )}
             <button
@@ -252,14 +318,16 @@ export function AutoOrderModal({
                 <p className="font-mono text-[10px] uppercase tracking-widest text-amber-600 max-w-md break-all">
                   {err}
                 </p>
-                <a
-                  href={orderUrl}
-                  target="_blank"
-                  rel="noopener"
-                  className="mt-4 font-mono text-[10px] uppercase tracking-widest px-4 py-2 border hairline rounded-sm faint hover:text-[var(--ink)] hover:border-[var(--ink)] transition-colors"
-                >
-                  Open {platform} yourself →
-                </a>
+                {effectiveItems[0]?.orderUrl && (
+                  <a
+                    href={effectiveItems[0].orderUrl}
+                    target="_blank"
+                    rel="noopener"
+                    className="mt-4 font-mono text-[10px] uppercase tracking-widest px-4 py-2 border hairline rounded-sm faint hover:text-[var(--ink)] hover:border-[var(--ink)] transition-colors"
+                  >
+                    Open {platform} yourself →
+                  </a>
+                )}
               </div>
             )}
             {state === "live" && session && (
@@ -316,6 +384,44 @@ export function AutoOrderModal({
 
           {/* Step list */}
           <aside className="border-l hairline flex flex-col bg-[var(--bg)] min-h-0">
+            {isMulti && jobItems.length > 0 && (
+              <div className="px-4 py-3 border-b hairline shrink-0">
+                <p className="font-mono text-[10px] uppercase tracking-widest faint mb-2">
+                  Meal · {jobItems.filter((it) => it.inCart).length}/
+                  {jobItems.length} in cart
+                </p>
+                <div className="space-y-1.5">
+                  {jobItems.map((it, i) => (
+                    <div key={i} className="flex items-center gap-2 text-left">
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full inline-block shrink-0 ${
+                          it.inCart === true
+                            ? "bg-emerald-500"
+                            : it.inCart === false &&
+                                job?.status &&
+                                [
+                                  "cart",
+                                  "partial",
+                                  "manual",
+                                  "failed",
+                                ].includes(job.status)
+                              ? "bg-amber-500"
+                              : "bg-[var(--ink)] opacity-30"
+                        }`}
+                      />
+                      <span className="text-sm leading-tight truncate flex-1">
+                        {it.dish}
+                      </span>
+                      {it.price && (
+                        <span className="font-mono text-[9px] uppercase tracking-widest faint shrink-0">
+                          {it.price}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="px-4 py-3 border-b hairline shrink-0">
               <p className="font-mono text-[10px] uppercase tracking-widest faint">
                 Agent log
