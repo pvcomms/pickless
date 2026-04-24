@@ -120,6 +120,10 @@ export default function FeedMe() {
   const hydratedRef = useRef(false);
   const [muted, setMuted] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const buildIdRef = useRef(0);
+  const [savedAddressDisplay, setSavedAddressDisplay] = useState<string>("");
+  const [editingAddress, setEditingAddress] = useState(false);
+  const [addressDraft, setAddressDraft] = useState("");
 
   useEffect(() => {
     const isGuest =
@@ -385,9 +389,16 @@ export default function FeedMe() {
   function addToMeal() {
     if (!rec) return;
     sfx.pop();
+    const roles: Array<"drink" | "main" | "dessert"> = [
+      "drink",
+      "main",
+      "dessert",
+    ];
+    const role = roles[meal.length] ?? "dessert";
     setMeal((m) => [
       ...m,
       {
+        role,
         dish: rec.dish,
         restaurant: rec.restaurant,
         orderUrl: rec.orderUrl,
@@ -411,8 +422,8 @@ export default function FeedMe() {
     setTimeout(feedMe, 100);
   }
 
-  function removeFromMeal(idx: number) {
-    setMeal((m) => m.filter((_, i) => i !== idx));
+  function removeFromMeal(role: "drink" | "main" | "dessert") {
+    setMeal((m) => m.filter((it) => it.role !== role));
   }
 
   function orderFullMeal() {
@@ -442,69 +453,126 @@ export default function FeedMe() {
     setMealVibe(null);
   }
 
+  function mealPayload(extras?: object) {
+    return {
+      platforms,
+      history,
+      location,
+      prefs,
+      trends,
+      tasteProfile,
+      device,
+      weather,
+      warmth,
+      mood: mood ? `${mood.label} (${mood.bias})` : null,
+      context: timeCtx || { timeOfDay: timeOfDay() },
+      preFetched: liveRestaurants.slice(0, 18),
+      recentlyShown: recentlyShownRef.current,
+      loved,
+      skipped,
+      userId,
+      ...extras,
+    };
+  }
+
+  function mapMealItem(
+    data: any,
+    role: "drink" | "main" | "dessert",
+  ): MealItem {
+    return {
+      role,
+      dish: data.dish,
+      restaurant: data.restaurant,
+      restaurantId: data.restaurantId,
+      orderUrl: data.orderUrl,
+      price: data.price,
+      platform: data.platform,
+      reason: data.reason,
+      deliveryMins: data.deliveryMins,
+      live: data.live,
+    };
+  }
+
   async function buildMeal() {
     if (buildingMeal) return;
     setBuildingMeal(true);
     setMeal([]);
     setMealVibe(null);
+    const id = ++buildIdRef.current;
     try {
       const res = await fetch("/api/recommend-meal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          platforms,
-          history,
-          location,
-          prefs,
-          trends,
-          tasteProfile,
-          device,
-          weather,
-          warmth,
-          mood: mood ? `${mood.label} (${mood.bias})` : null,
-          context: timeCtx || { timeOfDay: timeOfDay() },
-          preFetched: liveRestaurants.slice(0, 18),
-          recentlyShown: recentlyShownRef.current,
-          loved,
-          skipped,
-          userId,
-        }),
+        body: JSON.stringify(mealPayload()),
       });
       const data = await res.json();
+      if (buildIdRef.current !== id) return;
       if (data.drink && data.main && data.dessert) {
         setMeal([
-          {
-            dish: data.drink.dish,
-            restaurant: data.drink.restaurant,
-            orderUrl: data.drink.orderUrl,
-            price: data.drink.price,
-            platform: data.drink.platform,
-          },
-          {
-            dish: data.main.dish,
-            restaurant: data.main.restaurant,
-            orderUrl: data.main.orderUrl,
-            price: data.main.price,
-            platform: data.main.platform,
-          },
-          {
-            dish: data.dessert.dish,
-            restaurant: data.dessert.restaurant,
-            orderUrl: data.dessert.orderUrl,
-            price: data.dessert.price,
-            platform: data.dessert.platform,
-          },
+          mapMealItem(data.drink, "drink"),
+          mapMealItem(data.main, "main"),
+          mapMealItem(data.dessert, "dessert"),
         ]);
         if (data.vibe) setMealVibe(data.vibe);
         sfx.bell();
       }
     } catch {}
-    setBuildingMeal(false);
+    if (buildIdRef.current === id) setBuildingMeal(false);
+  }
+
+  async function regenerateSlot(role: "drink" | "main" | "dessert") {
+    const snapshot = [...meal];
+    const existing = {
+      drink: meal.find((m) => m.role === "drink"),
+      main: meal.find((m) => m.role === "main"),
+      dessert: meal.find((m) => m.role === "dessert"),
+    };
+    // Optimistically clear the slot
+    setMeal((prev) => prev.filter((m) => m.role !== role));
+    try {
+      const res = await fetch("/api/recommend-meal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          mealPayload({
+            lockSlots: (["drink", "main", "dessert"] as const).filter(
+              (r) => r !== role,
+            ),
+            existing,
+          }),
+        ),
+      });
+      const data = await res.json();
+      const newItem = data[role];
+      if (newItem) {
+        setMeal(() => {
+          const order: Array<"drink" | "main" | "dessert"> = [
+            "drink",
+            "main",
+            "dessert",
+          ];
+          return order
+            .map((r) =>
+              r === role
+                ? mapMealItem(newItem, role)
+                : (existing[r] ?? undefined),
+            )
+            .filter(Boolean) as MealItem[];
+        });
+        sfx.pop();
+      } else {
+        setMeal(snapshot);
+      }
+    } catch {
+      setMeal(snapshot);
+    }
   }
 
   function clearMeal() {
+    buildIdRef.current++;
     setMeal([]);
     setMealVibe(null);
+    setBuildingMeal(false);
   }
 
   function skip(reason?: string) {
@@ -1247,17 +1315,16 @@ export default function FeedMe() {
         />
       )}
 
-      {/* Meal cart — pinned bottom-right when meal in progress */}
-      {meal.length > 0 && phase !== "spinning" && (
+      {/* Meal cart — pinned bottom when meal in progress or building */}
+      {(meal.length > 0 || buildingMeal) && phase !== "spinning" && (
         <MealCart
           items={meal}
           vibe={mealVibe}
+          loading={buildingMeal}
           onRemove={removeFromMeal}
+          onRegenerate={regenerateSlot}
           onOrder={orderFullMeal}
-          onClear={() => {
-            setMeal([]);
-            setMealVibe(null);
-          }}
+          onClear={clearMeal}
         />
       )}
 

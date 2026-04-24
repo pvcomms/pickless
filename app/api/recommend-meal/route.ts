@@ -21,6 +21,8 @@ export async function POST(req: NextRequest) {
     loved,
     skipped,
     userId,
+    lockSlots,
+    existing,
   } = await req.json();
 
   let liveRestaurants: LiveRestaurant[] = [];
@@ -60,7 +62,42 @@ export async function POST(req: NextRequest) {
     ? `Taste: ${tasteProfile.archetype || ""} · "${(tasteProfile.agentInstructions || "").slice(0, 150)}"`
     : "";
 
-  const prompt = `You are Pickless — a decisive food agent. Design a complete meal for this person: one drink + one main + one dessert. The three items should feel intentional together — same vibe, complementary flavours.
+  const lovedLine =
+    Array.isArray(loved) && loved.length > 0
+      ? `Loved (lean toward these styles): ${loved
+          .slice(0, 6)
+          .map((l: any) => l.dish)
+          .join(", ")}`
+      : "";
+
+  const skippedLine =
+    Array.isArray(skipped) && skipped.length > 0
+      ? `Skipped / avoid: ${skipped
+          .slice(0, 6)
+          .map((s: any) => s.dish)
+          .join(", ")}`
+      : "";
+
+  // Build locked-slots context for partial regeneration
+  const locks: string[] = Array.isArray(lockSlots) ? lockSlots : [];
+  const lockedCtx =
+    locks.length > 0
+      ? `\n== LOCKED (do not change, design around these) ==\n${locks
+          .map((r: string) => {
+            const it = existing?.[r];
+            return it
+              ? `- ${r}: ${it.dish} from ${it.restaurant} (${it.price})`
+              : null;
+          })
+          .filter(Boolean)
+          .join("\n")}\n`
+      : "";
+
+  const toGenerate = ["drink", "main", "dessert"].filter(
+    (r) => !locks.includes(r),
+  );
+
+  const prompt = `You are Pickless — a decisive food agent. Design a complete meal: one drink + one main + one dessert. The three items should feel intentional together — same vibe, complementary flavours.
 
 == CONTEXT ==
 Location: ${locationLine}
@@ -68,17 +105,24 @@ Time: ${context?.timeOfDay || "dinner"}
 Mood: ${mood || "—"}
 Prefs: ${prefsLine}
 ${tasteLine}
-
+${lovedLine}
+${skippedLine}
+${lockedCtx}
 == LIVE RESTAURANTS ==
 ${restaurantList}
 
 == DIRECTIVE ==
-Pick three items that form a satisfying complete meal:
+${
+  locks.length > 0
+    ? `The locked courses above are already decided. Generate ONLY: ${toGenerate.join(", ")}.
+Design the unlocked courses to complement the locked ones in flavour, vibe, and budget.`
+    : `Pick three items that form a satisfying complete meal:
 - drink: a beverage (chai, juice, lassi, coffee, nimbu pani, soda — whatever fits the mood and cuisine)
 - main: the centrepiece dish — filling, satisfying, on-brand for this person's taste
-- dessert: something small and sweet to close — gulab jamun, kulfi, brownie, whatever fits
+- dessert: something small and sweet to close — gulab jamun, kulfi, brownie, whatever fits`
+}
 
-Prefer all three from the same restaurant if that restaurant can serve all courses. Otherwise pick best-in-class per course from different restaurants.
+Prefer all three from the same restaurant if it can serve all courses. Otherwise pick best-in-class per course from different restaurants.
 
 Hard rules:
 - HARD CAP: each item's price must be ≤ ₹${prefs?.budgetMax || 500}
@@ -111,7 +155,7 @@ Reply ONLY with this JSON (no markdown fences):
     "price": "<₹XX>",
     "reason": "<5-7 word reason>"
   },
-  "vibe": "<one line painting how this full meal will feel, 10-14 words — like 'smoky, cold, sweet at the end — a complete arc'>"
+  "vibe": "<one line painting how this full meal will feel, 10-14 words>"
 }`;
 
   let text = "";
@@ -135,8 +179,9 @@ Reply ONLY with this JSON (no markdown fences):
     return NextResponse.json({ error: "parse failed", text }, { status: 500 });
   }
 
-  function resolveItem(item: any) {
+  function resolveItem(item: any, role: string) {
     if (!item) return item;
+    item.role = role;
     const matched = liveRestaurants.find((r) => r.id === item.restaurantId);
     if (matched) {
       item.orderUrl = matched.swiggyUrl;
@@ -153,9 +198,16 @@ Reply ONLY with this JSON (no markdown fences):
     return item;
   }
 
-  meal.drink = resolveItem(meal.drink);
-  meal.main = resolveItem(meal.main);
-  meal.dessert = resolveItem(meal.dessert);
+  meal.drink = resolveItem(meal.drink, "drink");
+  meal.main = resolveItem(meal.main, "main");
+  meal.dessert = resolveItem(meal.dessert, "dessert");
+
+  // Override locked slots with the caller's existing items (they don't need regen)
+  for (const role of locks) {
+    if (existing?.[role]) {
+      meal[role] = { ...existing[role], role };
+    }
+  }
 
   return NextResponse.json(meal);
 }
