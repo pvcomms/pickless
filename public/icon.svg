@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="96" fill="#0f0f0d"/>
+  <rect x="96" y="96" width="320" height="320" rx="24" fill="#c23a2a"/>
+  <rect x="96" y="96" width="320" height="320" rx="24" fill="none" stroke="#c23a2a" stroke-width="6" opacity="0.6"/>
+  <rect x="118" y="138" width="10" height="20" fill="#c23a2a" opacity="0.4"/>
+  <rect x="378" y="298" width="14" height="14" fill="#c23a2a" opacity="0.5"/>
+  <rect x="172" y="396" width="22" height="6" fill="#c23a2a" opacity="0.3"/>
+  <text x="256" y="316" font-family="serif" font-size="240" font-weight="400" fill="#0f0f0d" text-anchor="middle" dominant-baseline="middle" style="letter-spacing:-0.02em">食</text>
+</svg>

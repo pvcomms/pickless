@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { sfx } from "@/lib/sfx";
 
 export function ReelSpin({
   spinning,
@@ -15,34 +16,57 @@ export function ReelSpin({
   const [frame, setFrame] = useState<string | null>(null);
   const tRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Stash latest values in refs so the loop sees fresh data without restarting
+  const finalRef = useRef<string | null>(finalText);
+  const onDoneRef = useRef(onDone);
+  finalRef.current = finalText;
+  onDoneRef.current = onDone;
+
   useEffect(() => {
-    if (!spinning || !finalText) return;
+    if (!spinning) return;
     let cancelled = false;
-    const steps = 16;
     let i = 0;
+    let landing = false;
+    let landingI = 0;
+
     const tick = () => {
       if (cancelled) return;
-      if (i >= steps) {
-        setFrame(finalText);
-        onDone?.();
+
+      // First moment finalText shows up → flip into landing mode
+      if (finalRef.current && !landing) {
+        landing = true;
+        landingI = 0;
+      }
+
+      // Land after 14 deceleration frames
+      if (landing && landingI >= 14) {
+        setFrame(finalRef.current);
+        onDoneRef.current?.();
         return;
       }
-      setFrame(pool[Math.floor(Math.random() * pool.length)] || "…");
+
+      const word = pool[Math.floor(Math.random() * pool.length)] || "…";
+      setFrame(word);
+      if (i % 2 === 0) sfx.tick();
       i++;
-      const delay = 60 + Math.pow(i / steps, 2.2) * 280;
+      if (landing) landingI++;
+
+      // Steeper deceleration so the final 2-3 frames are readable
+      const delay = landing ? 50 + Math.pow(landingI / 14, 3.2) * 520 : 75;
       tRef.current = setTimeout(tick, delay);
     };
     tick();
+
     return () => {
       cancelled = true;
       if (tRef.current) clearTimeout(tRef.current);
     };
-  }, [spinning, finalText, pool, onDone]);
+  }, [spinning, pool]); // intentionally NOT depending on finalText/onDone
 
   return (
-    <div className="overflow-hidden h-[1.15em]">
-      <span className="block font-display text-[clamp(2.4rem,7vw,4.5rem)] leading-tight tracking-tight">
-        {frame || finalText || "—"}
+    <div className="min-h-[1.4em] flex items-center justify-center">
+      <span className="block font-display text-[clamp(2rem,6vw,3.8rem)] leading-tight tracking-tight">
+        {frame || finalText || "…"}
       </span>
     </div>
   );

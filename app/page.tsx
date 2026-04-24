@@ -29,6 +29,25 @@ export default function Landing() {
       setLoc(data);
       localStorage.setItem("pickless_location", JSON.stringify(data));
       setPhase("located");
+
+      // BACKGROUND: as soon as location is locked, pre-fetch real restaurants
+      // for this exact spot. By the time the user clicks Begin OR Skip, the
+      // combo bank is already sitting in localStorage — Feed Me fires instantly.
+      void (async () => {
+        try {
+          const r2 = await fetch(
+            `/api/restaurants?lat=${data.lat}&lng=${data.lng}&city=${encodeURIComponent(data.city || "")}&neighborhood=${encodeURIComponent(data.neighborhood || "")}`,
+          );
+          const rdata = await r2.json();
+          localStorage.setItem(
+            "pickless_live_restaurants",
+            JSON.stringify({
+              fetchedAt: new Date().toISOString(),
+              restaurants: rdata.restaurants || [],
+            }),
+          );
+        } catch {}
+      })();
     } catch {
       setPhase("denied");
     }
@@ -57,8 +76,9 @@ export default function Landing() {
         </h1>
 
         <p className="mt-8 max-w-xl text-base sm:text-lg leading-relaxed faint">
-          Pickless is the agent for people who don&apos;t want a menu. One tap.
-          The AI picks from the apps you already use, then orders it.
+          Participate in the modern economy on <em>your</em> terms. A humanist
+          appendage on top of the apps you already use — your taste, learned
+          once, plug-and-play across every interface.
         </p>
 
         {/* Live location status */}
@@ -102,13 +122,16 @@ export default function Landing() {
           )}
         </div>
 
-        <Link
-          href="/connect"
-          className={`group inline-flex items-center gap-3 px-7 py-4 border hairline rounded-sm font-mono text-xs uppercase tracking-widest transition-all duration-500 ${
-            phase === "located"
-              ? "bg-[var(--ink)] text-[var(--bg)] hover:bg-[var(--seal)] hover:text-[var(--bg)] border-transparent"
-              : "faint pointer-events-none opacity-50"
-          }`}
+        <button
+          onClick={async () => {
+            if (phase !== "located") {
+              try {
+                await requestLocation();
+              } catch {}
+            }
+            window.location.href = "/connect";
+          }}
+          className="group inline-flex items-center gap-3 px-7 py-4 rounded-sm font-mono text-xs uppercase tracking-widest transition-all duration-500 bg-[var(--ink)] text-[var(--bg)] hover:bg-[var(--seal)] cursor-pointer"
         >
           Begin
           <svg
@@ -124,10 +147,27 @@ export default function Landing() {
               strokeWidth="1.2"
             />
           </svg>
-        </Link>
+        </button>
 
         <p className="mt-6 text-xs faint">
           Free. No card. The agent keeps no menus.
+        </p>
+
+        <button
+          onClick={async () => {
+            if (phase !== "located") {
+              try {
+                await requestLocation();
+              } catch {}
+            }
+            window.location.href = "/app?guest=1";
+          }}
+          className="mt-8 font-mono text-[10px] uppercase tracking-widest faint hover:text-[var(--ink)] transition-colors underline underline-offset-4 decoration-dotted"
+        >
+          Skip setup · just feed me random →
+        </button>
+        <p className="mt-2 text-[10px] faint max-w-xs">
+          location only · no email, no apps · top-rated picks near you
         </p>
       </section>
 
@@ -172,9 +212,44 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Manifesto */}
+      <section className="border-t hairline">
+        <div className="max-w-3xl mx-auto px-8 py-24 text-left">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--seal)] mb-6">
+            ● The bigger thing
+          </p>
+          <h2 className="font-display text-3xl sm:text-4xl tracking-tight leading-tight mb-8">
+            Pickless is one instance of a <em>protocol</em>.
+          </h2>
+          <div className="space-y-5 text-base sm:text-lg leading-relaxed faint max-w-2xl">
+            <p>
+              Big platforms don&apos;t care about you. They care about their
+              bottom line — and that&apos;s reflected in every default they
+              ship. Same recommendations, same dark patterns, same plays run on
+              you forever. They have all the data. You just keep clicking.
+            </p>
+            <p>
+              Pickless is the last mile, flipped back toward the user. We sit on
+              top of the apps you already use, take the levers the platforms
+              won&apos;t give you, and make their stack work for you.
+              <em> A bit of a protest, really.</em>
+            </p>
+            <p>
+              Underneath: a portable, cross-app <em>preference layer</em> that
+              you own. Your taste, your routines, your last-orders, your dietary
+              signals — learned once, plug-and-play into any agent, any
+              interface.
+            </p>
+            <p className="text-[var(--ink)]">
+              <em>Think MCP. Think Aadhaar. But for the cyborg human.</em>
+            </p>
+          </div>
+        </div>
+      </section>
+
       <footer className="border-t hairline px-8 py-6 flex items-center justify-between">
         <span className="font-mono text-[10px] uppercase tracking-widest faint">
-          pickless.ai · the agent eats with you
+          pickless.ai · part of the suite
         </span>
         <span className="font-jp text-sm text-[var(--seal)]">食</span>
       </footer>

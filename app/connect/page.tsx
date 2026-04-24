@@ -8,6 +8,19 @@ import {
   type LocationData,
 } from "@/lib/location";
 
+function readGmailCookie(): any[] {
+  if (typeof document === "undefined") return [];
+  const m = document.cookie.match(/(?:^|;\s*)pickless_gmail_orders=([^;]+)/);
+  if (!m) return [];
+  try {
+    const decoded = decodeURIComponent(m[1]);
+    document.cookie = "pickless_gmail_orders=; max-age=0; path=/";
+    return JSON.parse(decoded);
+  } catch {
+    return [];
+  }
+}
+
 const REGIONS = ["IN", "UK", "US", "AU", "EU"] as const;
 type Region = (typeof REGIONS)[number];
 const REGION_LABELS: Record<Region, string> = {
@@ -24,6 +37,11 @@ export default function Connect() {
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [opening, setOpening] = useState<string | null>(null);
   const [location, setLocation] = useState<LocationData | null>(null);
+  const [gmailStatus, setGmailStatus] = useState<{
+    kind: "ok" | "err" | "denied";
+    n?: number;
+    msg?: string;
+  } | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem("pickless_location");
@@ -37,6 +55,52 @@ export default function Connect() {
     }
     const c = localStorage.getItem("pickless_connected");
     if (c) setConnected(new Set(JSON.parse(c)));
+
+    // Handle Gmail OAuth return.
+    const sp = new URLSearchParams(window.location.search);
+    const gmail = sp.get("gmail");
+    if (gmail === "ok") {
+      const orders = readGmailCookie();
+      const n = orders.length || Number(sp.get("n") || 0);
+      if (orders.length > 0) {
+        const existing = JSON.parse(
+          localStorage.getItem("pickless_orders") || "[]",
+        );
+        const merged = [...orders, ...existing].slice(0, 60);
+        localStorage.setItem("pickless_orders", JSON.stringify(merged));
+        const next = new Set<string>(
+          JSON.parse(
+            localStorage.getItem("pickless_connected") || "[]",
+          ) as string[],
+        );
+        next.add("gmail");
+        localStorage.setItem("pickless_connected", JSON.stringify([...next]));
+        setConnected(next);
+
+        // Run deep taste-profile extraction in background
+        void (async () => {
+          try {
+            const r = await fetch("/api/taste-profile", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ orders: merged }),
+            });
+            const d = await r.json();
+            if (d.profile) {
+              localStorage.setItem(
+                "pickless_taste_profile",
+                JSON.stringify(d.profile),
+              );
+            }
+          } catch {}
+        })();
+      }
+      setGmailStatus({ kind: "ok", n });
+    } else if (gmail === "denied") {
+      setGmailStatus({ kind: "denied" });
+    } else if (gmail === "err") {
+      setGmailStatus({ kind: "err", msg: sp.get("msg") || "" });
+    }
   }, []);
 
   async function detect() {
@@ -70,7 +134,28 @@ export default function Connect() {
       if (e.data?.type !== "pickless:auth") return;
       if (e.data.platform !== id) return;
       const next = new Set(connected);
-      if (e.data.ok) next.add(id);
+      if (e.data.ok) {
+        next.add(id);
+        if (Array.isArray(e.data.orders) && e.data.orders.length > 0) {
+          const existing = JSON.parse(
+            localStorage.getItem("pickless_orders") || "[]",
+          );
+          const merged = [...e.data.orders, ...existing].slice(0, 60);
+          localStorage.setItem("pickless_orders", JSON.stringify(merged));
+        }
+        if (
+          Array.isArray(e.data.liveRestaurants) &&
+          e.data.liveRestaurants.length > 0
+        ) {
+          localStorage.setItem(
+            "pickless_live_restaurants",
+            JSON.stringify({
+              fetchedAt: new Date().toISOString(),
+              restaurants: e.data.liveRestaurants,
+            }),
+          );
+        }
+      }
       setConnected(next);
       localStorage.setItem("pickless_connected", JSON.stringify([...next]));
       setOpening(null);
@@ -96,7 +181,9 @@ export default function Connect() {
 
   function next() {
     if (connected.size === 0) return;
-    router.push("/app");
+    // If we have orders to learn from, route through the predictive profile.
+    const orders = JSON.parse(localStorage.getItem("pickless_orders") || "[]");
+    router.push(orders.length > 0 ? "/profile" : "/app");
   }
 
   const visible = PLATFORMS.filter((p) => p.regions.includes(region));
@@ -149,6 +236,49 @@ export default function Connect() {
               {REGION_LABELS[r]}
             </button>
           ))}
+        </div>
+
+        {/* Gmail real-orders import */}
+        <div className="mb-8 p-5 rounded-sm border hairline bg-[var(--paper)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--seal)] mb-1.5">
+                ● Real order history
+              </p>
+              <h3 className="font-display text-xl tracking-tight mb-1">
+                Import <em>real</em> orders from Gmail
+              </h3>
+              <p className="text-xs faint leading-relaxed max-w-sm">
+                We scan your Gmail for Swiggy + Zomato receipts (last 90 days)
+                and use Gemini to extract your actual order history. Read-only ·
+                nothing stored server-side.
+              </p>
+            </div>
+            <a
+              href="/api/gmail/start"
+              className="shrink-0 font-mono text-[10px] uppercase tracking-widest px-4 py-2 border border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)] rounded-sm hover:bg-[var(--seal)] hover:border-transparent transition-colors"
+            >
+              {connected.has("gmail") ? "Re-sync" : "Connect Gmail →"}
+            </a>
+          </div>
+
+          {gmailStatus?.kind === "ok" && (
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-emerald-500 flex items-center gap-2">
+              <span className="w-1 h-1 bg-emerald-500 rounded-full" />
+              Imported {gmailStatus.n ?? 0} real order
+              {gmailStatus.n === 1 ? "" : "s"}
+            </p>
+          )}
+          {gmailStatus?.kind === "err" && (
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-amber-500">
+              ● {gmailStatus.msg || "Something broke — try again"}
+            </p>
+          )}
+          {gmailStatus?.kind === "denied" && (
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-widest faint">
+              ● Access not granted
+            </p>
+          )}
         </div>
 
         {/* Platform tiles */}
@@ -215,8 +345,8 @@ export default function Connect() {
           }`}
         >
           {connected.size === 0
-            ? "Link at least one app"
-            : `Continue with ${connected.size} app${connected.size > 1 ? "s" : ""} →`}
+            ? "Connect Gmail OR a delivery app to continue"
+            : `Continue · ${connected.size} source${connected.size > 1 ? "s" : ""} linked →`}
         </button>
 
         <p className="mt-4 text-center text-xs faint">

@@ -1,8 +1,16 @@
 export type Platform = {
   id: string;
   name: string;
+  tagline: string;
   color: string;
   regions: string[];
+  // mobile deep link (custom URL scheme) — opens the installed app
+  appScheme: string;
+  // iOS App Store / Play Store fallback
+  iosUrl: string;
+  androidUrl: string;
+  // desktop fallback URL
+  webUrl: string;
   searchUrl: (query: string) => string;
 };
 
@@ -10,80 +18,45 @@ export const PLATFORMS: Platform[] = [
   {
     id: "swiggy",
     name: "Swiggy",
+    tagline: "India · food + groceries",
     color: "#FC8019",
     regions: ["IN"],
+    appScheme: "swiggy://",
+    iosUrl:
+      "https://apps.apple.com/in/app/swiggy-food-grocery-delivery/id989540920",
+    androidUrl:
+      "https://play.google.com/store/apps/details?id=in.swiggy.android",
+    webUrl: "https://www.swiggy.com",
     searchUrl: (q) =>
       `https://www.swiggy.com/search?query=${encodeURIComponent(q)}`,
   },
   {
     id: "zomato",
     name: "Zomato",
+    tagline: "India · restaurant ordering",
     color: "#E23744",
     regions: ["IN"],
+    appScheme: "zomato://",
+    iosUrl:
+      "https://apps.apple.com/in/app/zomato-food-delivery-dining/id434613896",
+    androidUrl:
+      "https://play.google.com/store/apps/details?id=com.application.zomato",
+    webUrl: "https://www.zomato.com",
     searchUrl: (q) =>
       `https://www.zomato.com/search?q=${encodeURIComponent(q)}`,
   },
   {
-    id: "blinkit",
-    name: "Blinkit",
-    color: "#F8CF00",
+    id: "swish",
+    name: "Swish",
+    tagline: "Bangalore · 10-min food delivery",
+    color: "#0FA968",
     regions: ["IN"],
-    searchUrl: (q) => `https://blinkit.com/s/?q=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "ubereats",
-    name: "Uber Eats",
-    color: "#06C167",
-    regions: ["UK", "US", "AU", "EU"],
+    appScheme: "swish://",
+    iosUrl: "https://apps.apple.com/in/app/swish-by-swiggy/id6477489665",
+    androidUrl: "https://play.google.com/store/apps/details?id=in.swiggy.swish",
+    webUrl: "https://swish.swiggy.com",
     searchUrl: (q) =>
-      `https://www.ubereats.com/search?q=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "deliveroo",
-    name: "Deliveroo",
-    color: "#00CCBC",
-    regions: ["UK", "EU", "AU"],
-    searchUrl: (q) =>
-      `https://deliveroo.co.uk/restaurants?q=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "justeat",
-    name: "Just Eat",
-    color: "#FF6900",
-    regions: ["UK", "EU"],
-    searchUrl: (q) =>
-      `https://www.just-eat.co.uk/search?q=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "wolt",
-    name: "Wolt",
-    color: "#00C2E8",
-    regions: ["EU"],
-    searchUrl: (q) => `https://wolt.com/en/search?q=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "doordash",
-    name: "DoorDash",
-    color: "#EB1700",
-    regions: ["US", "AU"],
-    searchUrl: (q) =>
-      `https://www.doordash.com/search/store/${encodeURIComponent(q)}/`,
-  },
-  {
-    id: "grubhub",
-    name: "Grubhub",
-    color: "#F63440",
-    regions: ["US"],
-    searchUrl: (q) =>
-      `https://www.grubhub.com/search?queryText=${encodeURIComponent(q)}`,
-  },
-  {
-    id: "menulog",
-    name: "Menulog",
-    color: "#FF8000",
-    regions: ["AU"],
-    searchUrl: (q) =>
-      `https://www.menulog.com.au/search?q=${encodeURIComponent(q)}`,
+      `https://swish.swiggy.com/search?q=${encodeURIComponent(q)}`,
   },
 ];
 
@@ -101,11 +74,49 @@ export type Recommendation = {
 
 export type Preferences = {
   diet: "any" | "veg" | "vegan" | "halal";
-  budget: "low" | "mid" | "high";
+  cuisines: string[];
+  vibe: "cheap" | "healthy" | "treat" | "adventure";
   spice: "mild" | "medium" | "hot";
+  budgetMax: number; // hard cap in INR
+  dontEat: string[]; // hard exclusions
 };
 export const DEFAULT_PREFS: Preferences = {
   diet: "any",
-  budget: "mid",
+  cuisines: [],
+  vibe: "treat",
   spice: "medium",
+  budgetMax: 500,
+  dontEat: [],
 };
+
+export const QUIZ_CUISINES = [
+  "Indian",
+  "South Indian",
+  "Asian",
+  "Italian",
+  "Mexican",
+  "Healthy bowls",
+  "Burgers",
+  "Cafe",
+  "Street food",
+];
+
+export const DONT_EAT_OPTIONS = [
+  "beef",
+  "pork",
+  "lamb",
+  "chicken",
+  "fish",
+  "shellfish",
+  "eggs",
+  "dairy",
+  "nuts",
+  "peanuts",
+  "gluten",
+  "mushroom",
+  "onion",
+  "garlic",
+  "spicy",
+];
+
+export const BUDGET_PRESETS = [200, 350, 500, 800, 1500];
