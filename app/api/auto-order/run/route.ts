@@ -2,21 +2,24 @@ import { NextRequest, NextResponse } from "next/server";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import { projectId } from "@/lib/browserbase";
-import { appendStep, readJob, writeJob } from "@/lib/autoorder";
+import { appendStep, patchItem, readJob } from "@/lib/autoorder";
 import { markPlatformLogin } from "@/lib/contexts";
 import { presetFor } from "@/lib/platformPresets";
 
 export const maxDuration = 60;
 
 // POST /api/auto-order/run
-// Body: { sessionId, dish, restaurant, platform, orderUrl }
-// Resumes an existing Browserbase session and runs LLM-driven `act()` calls
-// to add the dish to the user's cart. Streams progress to KV via appendStep.
-// Returns immediately with the final state when done.
+// Body: { sessionId }
+// Resumes the Browserbase session and loops job.items, adding each to cart in
+// turn. Streams progress to KV via appendStep. Final status:
+//   - "cart"    → all items confirmed in cart
+//   - "partial" → some items in cart, others not (multi only)
+//   - "manual"  → 0 items confirmed (user takes over from live view)
+//   - "failed"  → exception
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "bad body" }, { status: 400 });
-  const { sessionId, dish, restaurant } = body;
+  const { sessionId } = body;
   if (!sessionId || typeof sessionId !== "string") {
     return NextResponse.json({ error: "bad sessionId" }, { status: 400 });
   }
@@ -39,14 +42,21 @@ export async function POST(req: NextRequest) {
 
   let stagehand: Stagehand | null = null;
   const finalize = async (
-    status: "cart" | "manual" | "failed",
+    status: "cart" | "partial" | "manual" | "failed",
     msg: string,
     detail?: string,
   ) => {
     await appendStep(
       sessionId,
       {
-        kind: status === "cart" ? "ok" : status === "manual" ? "warn" : "error",
+        kind:
+          status === "cart"
+            ? "ok"
+            : status === "partial"
+              ? "warn"
+              : status === "manual"
+                ? "warn"
+                : "error",
         msg,
         detail,
       },
@@ -79,20 +89,24 @@ export async function POST(req: NextRequest) {
     await stagehand.init();
 
     const preset = presetFor(job.platform);
+    const items = job.items;
     await appendStep(sessionId, {
       kind: "info",
-      msg: `using ${preset.label} preset`,
+      msg:
+        items.length > 1
+          ? `using ${preset.label} preset · ${items.length} items`
+          : `using ${preset.label} preset`,
     });
 
-    // Optional preflight — handles platform-specific first-touch friction
-    // (Swiggy "Open in App" banner, Zomato login overlay) before the main loop.
+    // Run the platform preflight ONCE per session (e.g. dismiss "Open in App",
+    // accept location). After that we trust the same context.
     if (preset.preflight) {
       try {
         await stagehand.act(preset.preflight);
       } catch {}
     }
 
-    // Step 1 — dismiss blocking modal
+    // First scan-for-blockers — also one-shot per session.
     await appendStep(
       sessionId,
       { kind: "act", msg: "scanning for blocking modals" },
@@ -100,98 +114,147 @@ export async function POST(req: NextRequest) {
     );
     try {
       await stagehand.act(preset.blockerDismiss);
-    } catch (e) {
-      await appendStep(sessionId, {
-        kind: "warn",
-        msg: "modal scan had no effect",
-        detail: (e as Error).message?.slice(0, 200),
-      });
-    }
-
-    // Step 2 — locate the dish (skip search if already visible)
-    await appendStep(sessionId, {
-      kind: "act",
-      msg: `looking for "${dish}" on the menu`,
-    });
-    let foundOnPage = false;
-    try {
-      const present = await stagehand.extract(
-        `is the dish "${dish}" visible anywhere on this page?`,
-        z.object({
-          present: z.boolean(),
-          notes: z.string().optional(),
-        }),
-      );
-      foundOnPage = !!present?.present;
     } catch {}
 
-    if (!foundOnPage) {
+    let cartTotal: string | undefined;
+    let prevOrderUrl = "";
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const tag = items.length > 1 ? `[${i + 1}/${items.length}] ` : "";
+
+      // Navigate if this item lives at a different URL than the prev (or
+      // first iteration with empty prev URL).
+      if (item.orderUrl !== prevOrderUrl) {
+        await appendStep(sessionId, {
+          kind: "info",
+          msg: `${tag}opening ${item.restaurant}`,
+        });
+        try {
+          const ctx = stagehand.context;
+          const page = ctx.pages()[0] || (await ctx.newPage());
+          await page.goto(item.orderUrl, {
+            waitUntil: "domcontentloaded",
+            timeoutMs: 30000,
+          });
+          // Re-dismiss blockers after a fresh nav (some platforms re-show
+          // location prompts per restaurant).
+          try {
+            await stagehand.act(preset.blockerDismiss);
+          } catch {}
+        } catch (e) {
+          await appendStep(sessionId, {
+            kind: "warn",
+            msg: `${tag}navigation hiccup`,
+            detail: (e as Error).message?.slice(0, 200),
+          });
+        }
+        prevOrderUrl = item.orderUrl;
+      }
+
+      // Locate the dish (skip search if already visible)
+      await appendStep(sessionId, {
+        kind: "act",
+        msg: `${tag}looking for "${item.dish}"`,
+      });
+      let foundOnPage = false;
       try {
-        await stagehand.act(preset.search(dish));
+        const present = await stagehand.extract(
+          `is the dish "${item.dish}" visible anywhere on this page?`,
+          z.object({
+            present: z.boolean(),
+            notes: z.string().optional(),
+          }),
+        );
+        foundOnPage = !!present?.present;
+      } catch {}
+
+      if (!foundOnPage) {
+        try {
+          await stagehand.act(preset.search(item.dish));
+        } catch {}
+      }
+
+      // Click "Add"
+      let addClicked = false;
+      try {
+        await stagehand.act(preset.addItem(item.dish));
+        addClicked = true;
       } catch (e) {
         await appendStep(sessionId, {
           kind: "warn",
-          msg: "couldn't open menu search",
+          msg: `${tag}Add click failed for ${item.dish}`,
           detail: (e as Error).message?.slice(0, 200),
         });
       }
-    }
 
-    // Step 3 — click "Add" with platform-specific button hints
-    await appendStep(sessionId, {
-      kind: "act",
-      msg: `clicking Add on the ${dish} item`,
-    });
-    let addClicked = false;
-    try {
-      await stagehand.act(preset.addItem(dish));
-      addClicked = true;
-    } catch (e) {
+      // Customization
+      if (addClicked) {
+        try {
+          await stagehand.act(preset.customization);
+        } catch {}
+      }
+
+      // Verify per-item
+      let inCart = false;
+      try {
+        const verify = await stagehand.extract(
+          preset.verifyCart(item.dish, item.restaurant),
+          z.object({
+            inCart: z.boolean(),
+            itemName: z.string().optional(),
+            total: z.string().optional(),
+            notes: z.string().optional(),
+          }),
+        );
+        inCart = !!verify?.inCart;
+        if (verify?.total) cartTotal = verify.total;
+      } catch {}
+
+      await patchItem(sessionId, i, {
+        inCart,
+        reason: addClicked ? undefined : "add failed",
+      });
       await appendStep(sessionId, {
-        kind: "warn",
-        msg: "Add button click failed",
-        detail: (e as Error).message?.slice(0, 200),
+        kind: inCart ? "ok" : "warn",
+        msg: inCart
+          ? `${tag}${item.dish} → in cart`
+          : `${tag}${item.dish} → not confirmed`,
       });
     }
 
-    // Step 4 — handle customization with platform-specific cues
-    if (addClicked) {
-      try {
-        await stagehand.act(preset.customization);
-      } catch {}
-    }
+    // Final outcome based on per-item results
+    const inCartCount = items.filter((it, i) => {
+      // Re-read latest item state from DB-ish (in-memory items already updated
+      // via patchItem, but our local `items` reference was captured before;
+      // pull fresh).
+      void it;
+      return false;
+    }).length;
+    const fresh = await readJob(sessionId);
+    const succeeded = (fresh?.items || []).filter((it) => it.inCart).length;
+    const total = items.length;
 
-    // Step 5 — verify cart with platform-specific cart-finder hints
-    await appendStep(sessionId, {
-      kind: "extract",
-      msg: "checking cart status",
-    });
-    let inCart = false;
-    let cartTotal: string | undefined;
-    try {
-      const verify = await stagehand.extract(
-        preset.verifyCart(dish, restaurant),
-        z.object({
-          inCart: z.boolean(),
-          itemName: z.string().optional(),
-          total: z.string().optional(),
-          notes: z.string().optional(),
-        }),
-      );
-      inCart = !!verify?.inCart;
-      cartTotal = verify?.total;
-    } catch {}
-
-    if (inCart) {
+    if (succeeded === total) {
       await finalize(
         "cart",
         cartTotal
-          ? `${dish} added · cart ${cartTotal}`
-          : `${dish} added to cart`,
+          ? `${total === 1 ? items[0].dish + " added" : `all ${total} items added`} · cart ${cartTotal}`
+          : total === 1
+            ? `${items[0].dish} added to cart`
+            : `all ${total} items added to cart`,
       );
-      // Reaching cart implies the user already crossed login on this platform
-      // (Swiggy/Zomato can't add to cart without auth). Mark it so the next
-      // run shows "session restored" instead of "first run."
+      if (job.userId && job.platform) {
+        try {
+          await markPlatformLogin(job.userId, job.platform);
+        } catch {}
+      }
+    } else if (succeeded > 0) {
+      await finalize(
+        "partial",
+        `${succeeded} of ${total} items in cart · finish the rest in the live view`,
+        cartTotal ? `current cart: ${cartTotal}` : undefined,
+      );
       if (job.userId && job.platform) {
         try {
           await markPlatformLogin(job.userId, job.platform);
@@ -201,9 +264,12 @@ export async function POST(req: NextRequest) {
       await finalize(
         "manual",
         "agent placed you on the page · finish from the live view",
-        "couldn't confirm cart state automatically — common on Swiggy when login is required first",
+        "couldn't confirm any item in cart — usually login required first",
       );
     }
+
+    // touch unused for lint
+    void inCartCount;
   } catch (e) {
     await finalize(
       "failed",
@@ -218,14 +284,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Always release the Browserbase session at the end since the user has the
-  // live view open and can drive on their own from here. Actually NO — we want
-  // the user to keep interacting via the live URL. The frontend modal calls
-  // /api/auto-order/close when the user closes the modal.
   const finalJob = await readJob(sessionId);
   return NextResponse.json({ ok: true, job: finalJob });
 }
-
-// keep this so the file doesn't get tree-shaken — writeJob isn't used directly
-// after refactor but is available if we want to short-circuit
-void writeJob;

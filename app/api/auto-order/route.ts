@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { bb, projectId } from "@/lib/browserbase";
-import { writeJob, type AutoOrderJob } from "@/lib/autoorder";
+import { writeJob, type AutoOrderJob, type DishItem } from "@/lib/autoorder";
 import {
   getOrCreateContext,
   touchContext,
@@ -18,10 +18,51 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "bad body" }, { status: 400 });
-  const { orderUrl, dish, restaurant, platform, userId } = body;
-  if (!orderUrl || typeof orderUrl !== "string") {
-    return NextResponse.json({ error: "missing orderUrl" }, { status: 400 });
+  const { platform, userId } = body;
+
+  // Normalize input: accept items[] (new multi-dish), or single dish/restaurant
+  // (legacy single). items[0] is what the live view first navigates to.
+  let items: DishItem[] = [];
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    items = body.items
+      .filter(
+        (i: any) =>
+          i &&
+          typeof i.dish === "string" &&
+          typeof i.restaurant === "string" &&
+          typeof i.orderUrl === "string",
+      )
+      .map((i: any) => ({
+        dish: i.dish,
+        restaurant: i.restaurant,
+        restaurantId: i.restaurantId,
+        orderUrl: i.orderUrl,
+        price: i.price,
+      }));
+  } else if (
+    typeof body.dish === "string" &&
+    typeof body.restaurant === "string" &&
+    typeof body.orderUrl === "string"
+  ) {
+    items = [
+      {
+        dish: body.dish,
+        restaurant: body.restaurant,
+        restaurantId: body.restaurantId,
+        orderUrl: body.orderUrl,
+        price: body.price,
+      },
+    ];
   }
+  if (items.length === 0) {
+    return NextResponse.json({ error: "no items" }, { status: 400 });
+  }
+  // Cap to 5 items per session — Swiggy carts are per-restaurant, demo realism
+  items = items.slice(0, 5);
+  const firstItem = items[0];
+  const orderUrl = firstItem.orderUrl;
+  const dish = firstItem.dish;
+  const restaurant = firstItem.restaurant;
 
   const client = bb();
   const pid = projectId();
@@ -106,12 +147,16 @@ export async function POST(req: NextRequest) {
       restaurant,
       platform,
       orderUrl,
+      items,
       status: "starting",
       steps: [
         {
           at: new Date().toISOString(),
           kind: "info",
-          msg: "spinning up remote browser",
+          msg:
+            items.length > 1
+              ? `spinning up · ${items.length}-item meal`
+              : "spinning up remote browser",
         },
       ],
       startedAt: new Date().toISOString(),
@@ -138,12 +183,13 @@ export async function POST(req: NextRequest) {
       await stagehand.close();
     } catch {}
 
-    // Fire-and-forget the agent loop. /run has its own maxDuration.
+    // Fire-and-forget the agent loop. /run has its own maxDuration. Send the
+    // sessionId only — /run reads the full items list from KV.
     const origin = req.nextUrl.origin;
     void fetch(`${origin}/api/auto-order/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, dish, restaurant, platform, orderUrl }),
+      body: JSON.stringify({ sessionId }),
     }).catch(() => {});
 
     if (contextRecord && userId) {
@@ -159,6 +205,7 @@ export async function POST(req: NextRequest) {
       dish,
       restaurant,
       orderUrl,
+      itemCount: items.length,
       context: contextRecord
         ? {
             firstRun: contextRecord.knownLogins.length === 0,

@@ -13,17 +13,33 @@ export type AutoOrderJobStatus =
   | "starting" // session creating + first navigation
   | "navigating" // resumed, going to URL
   | "acting" // running stagehand acts
-  | "cart" // dish added to cart
+  | "cart" // at least one item added to cart
+  | "partial" // some items added, others failed (multi-item only)
   | "manual" // agent stopped, user must finish (login, payment, customization)
   | "failed";
+
+export type DishItem = {
+  dish: string;
+  restaurant: string;
+  restaurantId?: string;
+  orderUrl: string;
+  price?: string;
+  // Set during agent loop:
+  inCart?: boolean;
+  reason?: string;
+};
 
 export type AutoOrderJob = {
   sessionId: string;
   userId?: string;
+  // Convenience aliases for items[0] — kept for back-compat with existing UI.
   dish: string;
   restaurant: string;
   platform: string;
   orderUrl: string;
+  // Full ordered list of items the agent will try to add. items[0] mirrors
+  // dish/restaurant/orderUrl above.
+  items: DishItem[];
   status: AutoOrderJobStatus;
   steps: Step[];
   startedAt: string;
@@ -61,16 +77,31 @@ export async function writeJob(job: AutoOrderJob): Promise<void> {
 export async function appendStep(
   sessionId: string,
   step: Omit<Step, "at">,
-  patch?: Partial<Pick<AutoOrderJob, "status" | "error" | "finishedAt">>,
+  patch?: Partial<
+    Pick<AutoOrderJob, "status" | "error" | "finishedAt" | "items">
+  >,
 ): Promise<AutoOrderJob | null> {
   const cur = await readJob(sessionId);
   if (!cur) return null;
   const next: AutoOrderJob = {
     ...cur,
-    steps: [...cur.steps, { ...step, at: new Date().toISOString() }].slice(-30),
+    steps: [...cur.steps, { ...step, at: new Date().toISOString() }].slice(-50),
     updatedAt: new Date().toISOString(),
     ...(patch || {}),
   };
   await writeJob(next);
   return next;
+}
+
+export async function patchItem(
+  sessionId: string,
+  index: number,
+  patch: Partial<DishItem>,
+): Promise<void> {
+  const cur = await readJob(sessionId);
+  if (!cur) return;
+  const items = cur.items.map((it, i) =>
+    i === index ? { ...it, ...patch } : it,
+  );
+  await writeJob({ ...cur, items, updatedAt: new Date().toISOString() });
 }
