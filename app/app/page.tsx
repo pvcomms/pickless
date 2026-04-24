@@ -1279,7 +1279,9 @@ export default function FeedMe() {
       )}
 
       {skipToast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rise">
+        <div
+          className={`fixed left-1/2 -translate-x-1/2 z-50 rise ${meal.length > 0 ? "bottom-32" : "bottom-6"}`}
+        >
           <div className="bg-[var(--ink)] text-[var(--bg)] px-5 py-3 rounded-sm font-mono text-[10px] uppercase tracking-widest flex items-center gap-3 shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
             <span className="font-jp text-[var(--seal)] not-italic">✗</span>
             {skipToast}
