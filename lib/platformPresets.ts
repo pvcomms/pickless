@@ -16,9 +16,12 @@ export type PlatformPreset = {
   // Optional first-touch nav hints — e.g. accept Swiggy's location prompt with
   // the detected GPS coords, or close the "open in app" banner.
   preflight?: string;
-  // Called when the user's saved address is known — types it into address
-  // search fields so the agent never blocks waiting for the user to enter it.
+  // Called when the user's saved address is known — types it into any address
+  // search field so the agent never blocks waiting for the user to enter it.
   addressAct?: (savedAddress: string) => string;
+  // Extract call to confirm the delivery address was accepted after addressAct.
+  // Returns { confirmed: boolean, currentAddress?: string }.
+  addressVerify?: string;
 };
 
 const SWIGGY: PlatformPreset = {
@@ -27,7 +30,9 @@ const SWIGGY: PlatformPreset = {
   preflight:
     'on Swiggy, if there is an "Open in App" / "Continue to Web" banner, choose "Continue on Web". If a location selector asks for an address, accept the detected location or close the modal. If a "Sign In" or login prompt overlays the page, close it (do not log in — that\'s the user\'s job).',
   addressAct: (addr) =>
-    `on Swiggy, look for any address / location input field on the page (a search box asking "Enter your delivery location" or similar). If you see one, click it, clear any existing text, type "${addr}", wait for autocomplete suggestions to appear, then click the first suggestion that matches. If no address field is visible, do nothing.`,
+    `on Swiggy, look for any address / location input field on the page (a search box asking "Enter your delivery location", "Search for area, street name…", or similar). If visible, click it, clear any existing text, type "${addr}", wait for autocomplete suggestions to appear, then click the first suggestion that matches. If no address field is visible, do nothing.`,
+  addressVerify:
+    'on Swiggy, look at the top of the page — does it show a specific delivery location (a neighbourhood, street name, or building name — NOT the placeholder "Set your delivery location" or an empty field)? Return confirmed:true if a real address is showing.',
   blockerDismiss:
     'close any blocking modal on Swiggy: cookie consent, "Open in App" banner, location prompt, login nag, or first-time tutorial. Do NOT log in. Do NOT change the address. Just close/dismiss/skip whatever is in the way of the menu.',
   search: (dish) =>
@@ -46,7 +51,9 @@ const ZOMATO: PlatformPreset = {
   preflight:
     'on Zomato, if there is a "Login / Sign Up" overlay covering the page, close it. If a location modal asks "Where would you like to order?", accept the detected location.',
   addressAct: (addr) =>
-    `on Zomato, look for any address / delivery location input field (a search box asking "Where would you like to order?" or similar). If visible, click it, type "${addr}", wait for suggestions, and select the best match. If no address field is visible, do nothing.`,
+    `on Zomato, look for any address / delivery location input field (a search box asking "Where would you like to order?", "Search for area or street name…", or similar). If visible, click it, type "${addr}", wait for suggestions, and select the best match. If no address field is visible, do nothing.`,
+  addressVerify:
+    'on Zomato, does the page currently show a specific delivery location (neighbourhood or street name — NOT "Delivering to" with no address, or an empty field)? Return confirmed:true if a real address is set.',
   blockerDismiss:
     "dismiss any blocking overlay on Zomato: login prompt, location confirm, cookie banner, app-download nag. Do NOT sign in. Do NOT change the delivery address.",
   search: (dish) =>
@@ -64,6 +71,8 @@ const SWISH: PlatformPreset = {
   label: "Swish",
   preflight:
     'on Swish (10-min delivery), if there\'s an "Open in App" banner, dismiss it. If a location modal appears, accept the detected location.',
+  addressAct: (addr) =>
+    `on Swish, look for any delivery location or address input field. If visible, click it, type "${addr}", and select the best matching suggestion. If none visible, do nothing.`,
   blockerDismiss:
     "dismiss any modal on Swish: location confirm, app banner, login nag. Do NOT sign in. Do NOT change address.",
   search: (dish) =>

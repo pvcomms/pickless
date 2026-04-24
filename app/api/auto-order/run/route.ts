@@ -116,6 +116,34 @@ export async function POST(req: NextRequest) {
       try {
         await stagehand.act(preset.addressAct(job.savedAddress));
       } catch {}
+
+      // Verify the address was accepted; retry once if not.
+      if (preset.addressVerify) {
+        try {
+          const check = await stagehand.extract(
+            preset.addressVerify,
+            z.object({
+              confirmed: z.boolean(),
+              currentAddress: z.string().optional(),
+            }),
+          );
+          if (check && !check.confirmed) {
+            // One retry with the same instruction
+            try {
+              await stagehand.act(preset.addressAct(job.savedAddress));
+            } catch {}
+            await appendStep(sessionId, {
+              kind: "info",
+              msg: "address retry sent",
+            });
+          } else if (check?.confirmed) {
+            await appendStep(sessionId, {
+              kind: "ok",
+              msg: `address set: ${check.currentAddress || job.savedAddress}`,
+            });
+          }
+        } catch {}
+      }
     }
 
     // First scan-for-blockers — also one-shot per session.
@@ -154,6 +182,12 @@ export async function POST(req: NextRequest) {
           try {
             await stagehand.act(preset.blockerDismiss);
           } catch {}
+          // Re-fill address — Swiggy/Zomato sometimes re-prompt per restaurant.
+          if (preset.addressAct && job.savedAddress) {
+            try {
+              await stagehand.act(preset.addressAct(job.savedAddress));
+            } catch {}
+          }
         } catch (e) {
           await appendStep(sessionId, {
             kind: "warn",

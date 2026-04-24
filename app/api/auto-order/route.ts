@@ -1,5 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
-import { Stagehand } from "@browserbasehq/stagehand";
+import { NextRequest, NextResponse, after } from "next/server";
 import { bb, projectId } from "@/lib/browserbase";
 import { writeJob, type AutoOrderJob, type DishItem } from "@/lib/autoorder";
 import {
@@ -103,44 +102,29 @@ export async function POST(req: NextRequest) {
   );
 
   let sessionId = "";
-  let stagehand: Stagehand | null = null;
   try {
-    // Stagehand handles session creation. keepAlive=true so the session
-    // survives our SDK disconnect — /run reuses it. context.id + persist:true
-    // means Browserbase mounts the user's saved cookie jar at session start
+    // Create the Browserbase session DIRECTLY via the SDK — no Stagehand init
+    // here. Stagehand spin-up adds ~2s of LLM client warm-up that we don't
+    // need on the create path; /run does it once when the agent starts.
+    // context.id + persist:true mounts the user's saved cookie jar at start
     // and writes it back when the session ends.
-    stagehand = new Stagehand({
-      env: "BROWSERBASE",
-      apiKey: process.env.BROWSERBASE_API_KEY,
+    const session = await client.sessions.create({
       projectId: pid,
       keepAlive: true,
-      browserbaseSessionCreateParams: {
-        projectId: pid,
-        keepAlive: true,
-        browserSettings: {
-          blockAds: true,
-          viewport: { width: 1280, height: 800 },
-          ...(contextRecord
-            ? {
-                context: {
-                  id: contextRecord.id,
-                  persist: true,
-                },
-              }
-            : {}),
-        },
+      browserSettings: {
+        blockAds: true,
+        viewport: { width: 1280, height: 800 },
+        ...(contextRecord
+          ? {
+              context: {
+                id: contextRecord.id,
+                persist: true,
+              },
+            }
+          : {}),
       },
-      model: {
-        modelName: "anthropic/claude-haiku-4-5-20251001",
-        apiKey: anthropicKey,
-      },
-      verbose: 0,
-      disablePino: true,
-      domSettleTimeout: 1500,
-      selfHeal: true,
     });
-    await stagehand.init();
-    sessionId = stagehand.browserbaseSessionID || "";
+    sessionId = session.id;
     if (!sessionId) throw new Error("no session id");
 
     // Initial KV record so the modal has something to poll immediately.
@@ -169,33 +153,28 @@ export async function POST(req: NextRequest) {
     };
     await writeJob(job);
 
-    // Navigate to the restaurant page so the live view shows the right thing
-    // immediately, even before the agent loop starts.
-    const ctx = stagehand.context;
-    const page = ctx.pages()[0] || (await ctx.newPage());
-    try {
-      await page.goto(orderUrl, {
-        waitUntil: "domcontentloaded",
-        timeoutMs: 30000,
-      });
-    } catch {}
-
-    // Get live URL for the iframe
+    // Get the live URL so the iframe can mount immediately. The first
+    // navigation now happens inside /run (per-item loop) so the modal
+    // briefly shows about:blank then jumps to the restaurant.
     const debug = await client.sessions.debug(sessionId);
 
-    // Disconnect SDK but keep session alive (keepAlive=true).
-    try {
-      await stagehand.close();
-    } catch {}
-
-    // Fire-and-forget the agent loop. /run has its own maxDuration. Send the
-    // sessionId only — /run reads the full items list from KV.
+    // Schedule the agent loop to run AFTER the response is sent. `after()`
+    // is the supported Vercel/Next 16 mechanism for background work; raw
+    // `void fetch(...)` gets killed when the function suspends post-response.
+    // /run has its own maxDuration and reads the full items list from KV.
     const origin = req.nextUrl.origin;
-    void fetch(`${origin}/api/auto-order/run`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId }),
-    }).catch(() => {});
+    const triggerSessionId = sessionId;
+    after(async () => {
+      try {
+        await fetch(`${origin}/api/auto-order/run`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: triggerSessionId }),
+        });
+      } catch (err) {
+        console.error("[auto-order] /run trigger failed", err);
+      }
+    });
 
     if (contextRecord && userId) {
       // Best-effort touch — non-blocking
@@ -220,11 +199,6 @@ export async function POST(req: NextRequest) {
         : null,
     });
   } catch (e) {
-    if (stagehand) {
-      try {
-        await stagehand.close();
-      } catch {}
-    }
     return NextResponse.json(
       {
         error: "browserbase session failed",

@@ -196,6 +196,13 @@ export default function FeedMe() {
     if (l) setLocation(JSON.parse(l));
     else void refreshLocation();
 
+    const sa = localStorage.getItem("pickless_saved_address");
+    if (sa) {
+      try {
+        setSavedAddressDisplay(JSON.parse(sa));
+      } catch {}
+    }
+
     const p = localStorage.getItem("pickless_prefs");
     if (p) setPrefs(JSON.parse(p));
 
@@ -575,6 +582,16 @@ export default function FeedMe() {
     setBuildingMeal(false);
   }
 
+  function saveAddress() {
+    const trimmed = addressDraft.trim();
+    setEditingAddress(false);
+    if (!trimmed) return;
+    setSavedAddressDisplay(trimmed);
+    try {
+      localStorage.setItem("pickless_saved_address", JSON.stringify(trimmed));
+    } catch {}
+  }
+
   function skip(reason?: string) {
     if (rec?.dish && rec?.restaurant) {
       const next = recordSkip({
@@ -857,6 +874,50 @@ export default function FeedMe() {
                 <p className="mt-2 font-mono text-[9px] uppercase tracking-widest faint">
                   red ring = ~1.5km delivery range
                 </p>
+
+                {/* Agent delivery address — user can edit; auto-typed into Swiggy/Zomato */}
+                <div className="mt-4 flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-mono text-[9px] uppercase tracking-widest faint mb-1">
+                      Agent delivery address
+                    </p>
+                    {editingAddress ? (
+                      <input
+                        autoFocus
+                        value={addressDraft}
+                        onChange={(e) => setAddressDraft(e.target.value)}
+                        onBlur={saveAddress}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") saveAddress();
+                          if (e.key === "Escape") setEditingAddress(false);
+                        }}
+                        className="w-full font-display text-sm bg-transparent border-b border-[var(--ink)] outline-none pb-0.5 placeholder:opacity-30"
+                        placeholder="e.g. Diamond District, Indiranagar"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setAddressDraft(savedAddressDisplay);
+                          setEditingAddress(true);
+                        }}
+                        className="font-display text-sm tracking-tight text-left w-full hover:text-[var(--seal)] transition-colors flex items-center gap-2 group"
+                      >
+                        {savedAddressDisplay ? (
+                          <>
+                            <span>{savedAddressDisplay}</span>
+                            <span className="font-mono text-[8px] uppercase tracking-widest faint group-hover:text-[var(--seal)] transition-colors">
+                              edit
+                            </span>
+                          </>
+                        ) : (
+                          <span className="faint italic text-sm">
+                            tap to set delivery address
+                          </span>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
@@ -1333,7 +1394,17 @@ export default function FeedMe() {
         <AutoOrderModal
           open={mealOrderOpen}
           userId={userId}
-          platform={meal[0].platform}
+          platform={
+            // Normalise to a single platform — majority vote, fallback to swiggy.
+            // Avoids the agent using the wrong preset when items span platforms.
+            meal
+              .map((m) => m.platform)
+              .sort(
+                (a, b) =>
+                  meal.filter((m) => m.platform === b).length -
+                  meal.filter((m) => m.platform === a).length,
+              )[0] || "swiggy"
+          }
           items={meal.map((m) => ({
             dish: m.dish,
             restaurant: m.restaurant,
