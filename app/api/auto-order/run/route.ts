@@ -5,6 +5,7 @@ import { projectId } from "@/lib/browserbase";
 import { appendStep, patchItem, readJob } from "@/lib/autoorder";
 import { markPlatformLogin } from "@/lib/contexts";
 import { presetFor } from "@/lib/platformPresets";
+import { recordOutcome } from "@/lib/metrics";
 
 export const maxDuration = 60;
 
@@ -62,6 +63,9 @@ export async function POST(req: NextRequest) {
       },
       { status, finishedAt: new Date().toISOString() },
     );
+    if (job?.platform) {
+      void recordOutcome(job.platform, status).catch(() => {});
+    }
   };
 
   try {
@@ -228,8 +232,26 @@ export async function POST(req: NextRequest) {
 
       for (let attempt = 0; attempt <= 2; attempt++) {
         try {
-          await stagehand.act(addInstruction);
+          // First attempt: fast haiku (default). On retry: upgrade to sonnet
+          // for higher reliability. Costs ~3x but only on the path that
+          // already failed once — net better economics than always-sonnet.
+          const opts =
+            attempt === 0
+              ? undefined
+              : {
+                  model: {
+                    modelName: "anthropic/claude-sonnet-4-6" as const,
+                    apiKey: anthropicKey,
+                  },
+                };
+          await stagehand.act(addInstruction, opts);
           addClicked = true;
+          if (attempt > 0) {
+            await appendStep(sessionId, {
+              kind: "info",
+              msg: `${tag}sonnet recovered the Add click`,
+            });
+          }
           break;
         } catch (e) {
           addError = e as Error;
@@ -310,14 +332,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Final outcome based on per-item results
-    const inCartCount = items.filter((it, i) => {
-      // Re-read latest item state from DB-ish (in-memory items already updated
-      // via patchItem, but our local `items` reference was captured before;
-      // pull fresh).
-      void it;
-      return false;
-    }).length;
+    // Final outcome based on per-item results — re-read fresh from KV because
+    // local `items` was captured before patchItem() updates.
     const fresh = await readJob(sessionId);
     const succeeded = (fresh?.items || []).filter((it) => it.inCart).length;
     const total = items.length;
@@ -354,9 +370,6 @@ export async function POST(req: NextRequest) {
         "couldn't confirm any item in cart — usually login required first",
       );
     }
-
-    // touch unused for lint
-    void inCartCount;
   } catch (e) {
     await finalize(
       "failed",
