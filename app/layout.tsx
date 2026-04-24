@@ -3,7 +3,7 @@ import "./globals.css";
 import { InstallPrompt } from "@/components/InstallPrompt";
 
 export const metadata: Metadata = {
-  title: "Pickless — stop choosing. start eating.",
+  title: "Pickless — stop choosing. start living.",
   description:
     "One tap. Anywhere on earth. The agent picks your meal from the apps you already use, then orders it.",
   applicationName: "Pickless",

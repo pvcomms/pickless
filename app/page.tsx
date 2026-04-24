@@ -72,7 +72,7 @@ export default function Landing() {
         <h1 className="mt-10 font-display text-[clamp(3rem,9vw,6.5rem)] leading-[0.95] tracking-tight rise">
           Stop choosing.
           <br />
-          <em className="text-[var(--seal)]">Start eating.</em>
+          <em className="text-[var(--seal)]">Start living.</em>
         </h1>
 
         <p className="mt-8 max-w-xl text-base sm:text-lg leading-relaxed faint">

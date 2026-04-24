@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "Pickless",
     short_name: "Pickless",
     description:
-      "Stop choosing. Start eating. The agent picks your meal and orders it.",
+      "Stop choosing. Start living. The agent picks your meal and orders it.",
     start_url: "/app",
     display: "standalone",
     background_color: "#0f0f0d",

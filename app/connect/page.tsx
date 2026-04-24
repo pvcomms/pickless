@@ -7,6 +7,7 @@ import {
   regionForCountry,
   type LocationData,
 } from "@/lib/location";
+import { getUserId } from "@/lib/userId";
 
 function readGmailCookie(): any[] {
   if (typeof document === "undefined") return [];
@@ -42,6 +43,14 @@ export default function Connect() {
     n?: number;
     msg?: string;
   } | null>(null);
+  const [userId, setUserIdState] = useState<string>("");
+  const [whoop, setWhoop] = useState<{
+    connected: boolean;
+    recoveryScore: number | null;
+    bandLabel: string;
+    loading: boolean;
+    msg?: string;
+  }>({ connected: false, recoveryScore: null, bandLabel: "", loading: true });
 
   useEffect(() => {
     const stored = localStorage.getItem("pickless_location");
@@ -101,7 +110,60 @@ export default function Connect() {
     } else if (gmail === "err") {
       setGmailStatus({ kind: "err", msg: sp.get("msg") || "" });
     }
+
+    // Whoop OAuth result + status
+    const id = getUserId();
+    setUserIdState(id);
+    const whoopParam = sp.get("whoop");
+    if (whoopParam && whoopParam !== "connected") {
+      setWhoop({
+        connected: false,
+        recoveryScore: null,
+        bandLabel: "",
+        loading: false,
+        msg: `whoop · ${whoopParam}`,
+      });
+    } else {
+      void refreshWhoop(id);
+    }
   }, []);
+
+  async function refreshWhoop(id: string) {
+    setWhoop((w) => ({ ...w, loading: true }));
+    try {
+      const r = await fetch(`/api/whoop/snapshot?u=${id}`, {
+        cache: "no-store",
+      });
+      const d = await r.json();
+      setWhoop({
+        connected: !!d.connected,
+        recoveryScore: d.snapshot?.recoveryScore ?? null,
+        bandLabel: d.bandLabel || "",
+        loading: false,
+      });
+    } catch {
+      setWhoop({
+        connected: false,
+        recoveryScore: null,
+        bandLabel: "",
+        loading: false,
+      });
+    }
+  }
+
+  async function disconnectWhoop() {
+    await fetch("/api/whoop/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    });
+    setWhoop({
+      connected: false,
+      recoveryScore: null,
+      bandLabel: "",
+      loading: false,
+    });
+  }
 
   async function detect() {
     try {
@@ -277,6 +339,73 @@ export default function Connect() {
           {gmailStatus?.kind === "denied" && (
             <p className="mt-3 font-mono text-[10px] uppercase tracking-widest faint">
               ● Access not granted
+            </p>
+          )}
+        </div>
+
+        {/* Whoop biometric bias */}
+        <div className="mb-8 p-5 rounded-sm border hairline bg-[var(--paper)]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--seal)] mb-1.5">
+                ● Cyborg signal · optional
+              </p>
+              <h3 className="font-display text-xl tracking-tight mb-1">
+                Connect <em>Whoop</em> — let your body pick the food
+              </h3>
+              <p className="text-xs faint leading-relaxed max-w-sm">
+                Low recovery → comfort + protein. Green day → adventure. Your
+                strap quietly tilts every pick. Read-only · recovery, sleep,
+                strain.
+              </p>
+            </div>
+            {whoop.connected ? (
+              <div className="flex flex-col items-end gap-2 shrink-0">
+                <span className="font-mono text-[10px] uppercase tracking-widest text-emerald-500 flex items-center gap-1.5">
+                  <span className="w-1 h-1 bg-emerald-500 rounded-full" />
+                  Linked
+                </span>
+                <button
+                  onClick={disconnectWhoop}
+                  className="font-mono text-[10px] uppercase tracking-widest faint hover:text-[var(--ink)]"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <a
+                href={userId ? `/api/whoop/start?u=${userId}` : "#"}
+                className="shrink-0 font-mono text-[10px] uppercase tracking-widest px-4 py-2 border border-[var(--ink)] bg-[var(--ink)] text-[var(--bg)] rounded-sm hover:bg-[var(--seal)] hover:border-transparent transition-colors"
+              >
+                Connect Whoop →
+              </a>
+            )}
+          </div>
+
+          {whoop.connected && whoop.recoveryScore != null && (
+            <div className="mt-4 flex items-center gap-3">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  whoop.recoveryScore < 34
+                    ? "bg-red-500"
+                    : whoop.recoveryScore < 67
+                      ? "bg-amber-500"
+                      : "bg-emerald-500"
+                }`}
+              />
+              <span className="font-mono text-[10px] uppercase tracking-widest">
+                Recovery {whoop.recoveryScore}% · {whoop.bandLabel}
+              </span>
+            </div>
+          )}
+          {whoop.connected && whoop.recoveryScore == null && !whoop.loading && (
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-widest faint">
+              ● Linked · no recent recovery yet (wear the strap overnight)
+            </p>
+          )}
+          {whoop.msg && (
+            <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-amber-500">
+              ● {whoop.msg}
             </p>
           )}
         </div>

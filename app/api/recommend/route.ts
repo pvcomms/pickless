@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { PLATFORMS } from "@/lib/platforms";
 import { fetchSwiggyRestaurants, type LiveRestaurant } from "@/lib/swiggy";
 import { callGemini, extractJson } from "@/lib/gemini";
+import { fetchLatestSnapshot, biasHint, isConnected } from "@/lib/whoop";
 
 export async function POST(req: NextRequest) {
   const {
@@ -18,6 +19,8 @@ export async function POST(req: NextRequest) {
     warmth,
     preFetched,
     recentlyShown,
+    loved,
+    userId,
   } = await req.json();
   const seed = Math.floor(Math.random() * 100000);
   const platformNames = platforms
@@ -80,6 +83,27 @@ export async function POST(req: NextRequest) {
   const weatherLine = weather
     ? `${Math.round(weather.tempC)}°C feels ${Math.round(weather.feelsLikeC)}°C · ${weather.condition}${weather.precipitationMm ? " · raining" : ""}${weather.windKph > 25 ? " · windy" : ""}`
     : "no weather signal";
+  const lovedLine =
+    Array.isArray(loved) && loved.length > 0
+      ? loved
+          .slice(0, 8)
+          .map((l: any) => `${l.dish} @ ${l.restaurant}`)
+          .join(" | ")
+      : "";
+
+  let whoopLine = "";
+  if (typeof userId === "string" && /^[a-z0-9]{4,32}$/i.test(userId)) {
+    try {
+      if (await isConnected(userId)) {
+        const snap = await fetchLatestSnapshot(userId);
+        const hint = biasHint(snap);
+        if (hint) {
+          whoopLine = `BIOMETRIC BIAS (Whoop, recovery=${snap.recoveryScore}%, sleep=${snap.sleepPerformance}%): ${hint}`;
+        }
+      }
+    } catch {}
+  }
+
   // Compact taste profile (faster generation than the verbose multi-line version)
   const tasteLine = tasteProfile
     ? `\nTaste: ${tasteProfile.archetype || ""} · brief: "${(tasteProfile.agentInstructions || "").slice(0, 200)}"`
@@ -99,6 +123,7 @@ Stated prefs: ${prefsLine}
 Aggregate trend: ${trendLine}
 RECENTLY SHOWN OR ORDERED — NEVER repeat any of these:
 ${dontRepeat || "(none yet)"}
+${lovedLine ? `\nHEARTS (user explicitly loved these — STRONG positive signal, lean toward similar cuisine/style/restaurant, but don't literally repeat):\n${lovedLine}` : ""}${whoopLine ? `\n\n${whoopLine}\n(This is a TOP-2 directive — only mood overrides it. Pick should answer to the body state.)` : ""}
 
 Diversity seed: ${seed} (use this to break ties; pick differently than you would have last time)${tasteLine}
 

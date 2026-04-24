@@ -7,6 +7,20 @@ import { LiveMap } from "@/components/LiveMap";
 import { ReelSpin } from "@/components/ReelSpin";
 import { SpinningInsights } from "@/components/SpinningInsights";
 import { PortableProfile } from "@/components/PortableProfile";
+import { PredictPicks } from "@/components/PredictPicks";
+import { InlinePrefs } from "@/components/InlinePrefs";
+import { AutoOrderModal } from "@/components/AutoOrderModal";
+import { TasteSyncBadge } from "@/components/TasteSyncBadge";
+import { RecoveryBadge } from "@/components/RecoveryBadge";
+import { readLoved, toggleLoved, type LovedPick } from "@/lib/loved";
+import { getUserId } from "@/lib/userId";
+import {
+  pullCloud,
+  pushCloudDebounced,
+  writeLocal,
+  readLocal,
+} from "@/lib/cloudSync";
+import { type PredictPick } from "@/app/api/predict-picks/route";
 import {
   PLATFORMS,
   type Recommendation,
@@ -76,6 +90,7 @@ export default function FeedMe() {
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [phase, setPhase] = useState<"idle" | "spinning" | "revealed">("idle");
   const [orderState, setOrderState] = useState<"idle" | "placing">("idle");
+  const [autoOrderOpen, setAutoOrderOpen] = useState(false);
   const [liveRestaurants, setLiveRestaurants] = useState<any[]>([]);
   const [liveFetchedAt, setLiveFetchedAt] = useState<string | null>(null);
   const [mood, setMood] = useState<Mood | null>(null);
@@ -85,6 +100,11 @@ export default function FeedMe() {
   const [tasteProfile, setTasteProfile] = useState<any>(null);
   const [warmth, setWarmth] = useState<string>("");
   const [streakN, setStreakN] = useState(0);
+  const [loved, setLoved] = useState<LovedPick[]>([]);
+  const [lovedTick, setLovedTick] = useState(0);
+  const [userId, setUserIdState] = useState<string>("");
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
+  const hydratedRef = useRef(false);
   const [muted, setMuted] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -105,6 +125,28 @@ export default function FeedMe() {
     setWarmth(computeWarmth());
     setStreakN(streak.read());
     setMuted(sfx.muted());
+    setLoved(readLoved());
+
+    // Cloud sync: get/create anonymous ID, then pull remote snapshot.
+    // If remote exists and is newer than local, hydrate state from it.
+    const id = getUserId();
+    setUserIdState(id);
+    void (async () => {
+      const remote = await pullCloud(id);
+      if (remote) {
+        writeLocal(remote);
+        if (remote.prefs) setPrefs(remote.prefs);
+        if (Array.isArray(remote.loved)) setLoved(remote.loved);
+        if (remote.tasteProfile) setTasteProfile(remote.tasteProfile);
+        if (Array.isArray(remote.history)) setHistory(remote.history);
+        if (Array.isArray(remote.recentlyShown)) {
+          recentlyShownRef.current = remote.recentlyShown;
+          setRecentlyShown(remote.recentlyShown);
+        }
+        setSyncedAt(remote.updatedAt);
+      }
+      hydratedRef.current = true;
+    })();
 
     // Restore recently-shown from previous session so refresh doesn't break diversity
     try {
@@ -182,6 +224,20 @@ export default function FeedMe() {
     return () => clearInterval(id);
   }, []);
 
+  // Cloud push: debounced whenever any synced piece of state changes.
+  // Skip until hydration completes (otherwise empty state overwrites remote).
+  useEffect(() => {
+    if (!userId || !hydratedRef.current) return;
+    pushCloudDebounced(userId, {
+      prefs,
+      loved,
+      tasteProfile,
+      history,
+      recentlyShown: recentlyShownRef.current,
+    });
+    setSyncedAt(new Date().toISOString());
+  }, [userId, prefs, loved, tasteProfile, history, recentlyShown]);
+
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
@@ -233,6 +289,8 @@ export default function FeedMe() {
           context: timeCtx || { timeOfDay: timeOfDay() },
           preFetched: liveRestaurants.slice(0, 18),
           recentlyShown: recentlyShownRef.current,
+          loved,
+          userId,
         }),
       });
       const data: Recommendation = await res.json();
@@ -280,10 +338,12 @@ export default function FeedMe() {
     window.open(rec.orderUrl, "_blank");
   }
 
-  async function autoOrder() {
+  function autoOrder() {
     if (!rec) return;
-    setOrderState("placing");
-    await new Promise((r) => setTimeout(r, 1800));
+    setAutoOrderOpen(true);
+  }
+
+  function autoOrderConfirmed() {
     order();
     setOrderState("idle");
   }
@@ -292,6 +352,51 @@ export default function FeedMe() {
     setPhase("idle");
     setRec(null);
     setTimeout(feedMe, 100);
+  }
+
+  function updatePrefs(next: Preferences) {
+    setPrefs(next);
+    try {
+      localStorage.setItem("pickless_prefs", JSON.stringify(next));
+    } catch {}
+  }
+
+  function pickFromPrediction(pick: PredictPick) {
+    const asRec: Recommendation = {
+      dish: pick.dish,
+      restaurant: pick.restaurant,
+      platform: pick.platform,
+      price: pick.price,
+      reason: pick.reason,
+      tags: [pick.angle],
+      sponsored: false,
+      orderUrl: pick.orderUrl,
+    };
+    (asRec as any).vibe = pick.vibe;
+    (asRec as any).order = pick.dish;
+    setRec(asRec);
+    const next = [
+      { dish: pick.dish, restaurant: pick.restaurant },
+      ...recentlyShownRef.current,
+    ].slice(0, 20);
+    recentlyShownRef.current = next;
+    setRecentlyShown(next);
+    try {
+      localStorage.setItem("pickless_recently_shown", JSON.stringify(next));
+    } catch {}
+    setPhase("revealed");
+    sfx.thunk();
+    setTimeout(() => sfx.bell(), 320);
+    const s = streak.bump();
+    setStreakN(s);
+    setTimeout(
+      () =>
+        cardRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        }),
+      120,
+    );
   }
 
   const platform = rec ? PLATFORMS.find((p) => p.id === rec.platform) : null;
@@ -343,6 +448,8 @@ export default function FeedMe() {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 pulse-soft inline-block" />
             {location ? location.neighborhood || location.city : "Locating…"}
           </button>
+          <RecoveryBadge userId={userId} />
+          <TasteSyncBadge userId={userId} syncedAt={syncedAt} />
           <Link
             href="/connect"
             className="font-mono text-[10px] uppercase tracking-widest faint hover:text-[var(--ink)] transition-colors"
@@ -403,9 +510,33 @@ export default function FeedMe() {
               </div>
             </div>
 
+            <InlinePrefs prefs={prefs} onChange={updatePrefs} />
+
+            <PredictPicks
+              platforms={platforms}
+              history={history}
+              location={location}
+              prefs={prefs}
+              trends={trends}
+              context={timeCtx || { timeOfDay: timeOfDay() }}
+              mood={mood ? `${mood.label} (${mood.bias})` : null}
+              weather={weather}
+              tasteProfile={tasteProfile}
+              warmth={warmth}
+              liveRestaurants={liveRestaurants}
+              recentlyShown={recentlyShown}
+              loved={loved}
+              lovedTick={lovedTick}
+              userId={userId}
+              onPick={pickFromPrediction}
+            />
+
+            <p className="mt-10 font-mono text-[10px] uppercase tracking-widest faint">
+              or — let the agent pick blind
+            </p>
             <button
               onClick={feedMe}
-              className="mt-10 group inline-flex items-center gap-3 px-10 py-5 bg-[var(--ink)] text-[var(--bg)] rounded-sm font-mono text-xs uppercase tracking-widest hover:bg-[var(--seal)] transition-colors"
+              className="mt-3 group inline-flex items-center gap-3 px-10 py-5 bg-[var(--ink)] text-[var(--bg)] rounded-sm font-mono text-xs uppercase tracking-widest hover:bg-[var(--seal)] transition-colors"
             >
               Feed me
               <span className="font-jp">食</span>
@@ -695,6 +826,17 @@ export default function FeedMe() {
               from {rec.restaurant}
             </p>
 
+            <div className="mt-5 flex items-center justify-center">
+              <HeartButton
+                rec={rec}
+                loved={loved}
+                onChange={(next) => {
+                  setLoved(next);
+                  setLovedTick((t) => t + 1);
+                }}
+              />
+            </div>
+
             {(rec as any).order && (
               <div className="mt-8 max-w-md mx-auto text-left">
                 <p className="font-mono text-[10px] uppercase tracking-widest faint mb-1.5">
@@ -794,7 +936,60 @@ export default function FeedMe() {
           </div>
         )}
       </div>
+
+      {rec && (
+        <AutoOrderModal
+          open={autoOrderOpen}
+          userId={userId}
+          dish={rec.dish}
+          restaurant={rec.restaurant}
+          platform={rec.platform}
+          orderUrl={rec.orderUrl}
+          onClose={() => setAutoOrderOpen(false)}
+          onOrdered={autoOrderConfirmed}
+        />
+      )}
     </main>
+  );
+}
+
+function HeartButton({
+  rec,
+  loved,
+  onChange,
+}: {
+  rec: Recommendation;
+  loved: LovedPick[];
+  onChange: (next: LovedPick[]) => void;
+}) {
+  const on = loved.some(
+    (l) =>
+      l.dish.toLowerCase().trim() === rec.dish.toLowerCase().trim() &&
+      l.restaurant.toLowerCase().trim() === rec.restaurant.toLowerCase().trim(),
+  );
+  return (
+    <button
+      onClick={() => {
+        sfx.pop();
+        const { loved: next } = toggleLoved({
+          dish: rec.dish,
+          restaurant: rec.restaurant,
+          price: rec.price,
+        });
+        onChange(next);
+      }}
+      className={`group inline-flex items-center gap-2.5 px-4 py-2 border rounded-sm font-mono text-[10px] uppercase tracking-widest transition-all ${
+        on
+          ? "border-transparent bg-[var(--seal)] text-white"
+          : "hairline faint hover:text-[var(--seal)] hover:border-[var(--seal)]"
+      }`}
+      title={on ? "remove from loved" : "love this — bias future picks"}
+    >
+      <span aria-hidden className="text-base leading-none">
+        {on ? "♥" : "♡"}
+      </span>
+      {on ? "loved · biasing" : "love this"}
+    </button>
   );
 }
 
