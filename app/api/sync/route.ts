@@ -4,6 +4,7 @@ import { kv, userKey } from "@/lib/kv";
 export type CloudSnapshot = {
   prefs?: any;
   loved?: any[];
+  skipped?: any[];
   tasteProfile?: any;
   history?: any[];
   recentlyShown?: any[];
@@ -44,6 +45,9 @@ export async function POST(req: NextRequest) {
   const snap: CloudSnapshot = {
     prefs: body.prefs,
     loved: Array.isArray(body.loved) ? body.loved.slice(0, 50) : undefined,
+    skipped: Array.isArray(body.skipped)
+      ? body.skipped.slice(0, 30)
+      : undefined,
     tasteProfile: body.tasteProfile,
     history: Array.isArray(body.history)
       ? body.history.slice(0, 50)

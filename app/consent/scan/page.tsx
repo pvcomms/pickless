@@ -20,12 +20,19 @@ type VerifyResult = {
   error?: string;
 };
 
+type Suggestion = {
+  dish: string;
+  reason: string;
+};
+
 function ScanInner() {
   const params = useSearchParams();
   const [phase, setPhase] = useState<Phase>("idle");
   const [token, setToken] = useState(params.get("t") ?? "");
   const [result, setResult] = useState<VerifyResult | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
 
   useEffect(() => {
     const t = params.get("t");
@@ -36,11 +43,28 @@ function ScanInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function fetchSuggestion(prefs: VerifyResult["prefs"], scope: string) {
+    setSuggesting(true);
+    try {
+      const res = await fetch("/api/consent/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefs, scope }),
+      });
+      if (res.ok) {
+        const data: Suggestion = await res.json();
+        setSuggestion(data);
+      }
+    } catch {}
+    setSuggesting(false);
+  }
+
   async function verify(t?: string) {
     const tok = (t ?? token).trim();
     if (!tok) return;
     setPhase("verifying");
     setErrorMsg("");
+    setSuggestion(null);
     try {
       const res = await fetch("/api/consent/verify", {
         method: "POST",
@@ -54,6 +78,7 @@ function ScanInner() {
       } else {
         setResult(data);
         setPhase("valid");
+        void fetchSuggestion(data.prefs, data.scope);
       }
     } catch {
       setErrorMsg("Network error");
@@ -66,6 +91,8 @@ function ScanInner() {
     setToken("");
     setResult(null);
     setErrorMsg("");
+    setSuggestion(null);
+    setSuggesting(false);
   }
 
   return (
@@ -75,7 +102,7 @@ function ScanInner() {
           pickless<span className="text-[var(--seal)]">.ai</span>
         </Link>
         <span className="font-mono text-[10px] uppercase tracking-widest faint">
-          merchant verify
+          merchant
         </span>
       </nav>
 
@@ -83,12 +110,14 @@ function ScanInner() {
         {phase === "idle" && (
           <div className="w-full text-center rise">
             <Hanko size={52} label="検" />
-            <h1 className="mt-8 font-display text-4xl tracking-tight">
-              Verify a pass
+            <h1 className="mt-8 font-display text-4xl tracking-tight leading-tight">
+              Sign in with
+              <br />
+              Pickless
             </h1>
-            <p className="mt-4 text-sm faint leading-relaxed max-w-sm mx-auto">
-              Enter the token shown on the customer&apos;s screen. You&apos;ll
-              receive their preferences — single use, no identity.
+            <p className="mt-5 text-sm faint leading-relaxed max-w-sm mx-auto">
+              Customer shares a 5-minute taste pass. You scan or enter the token
+              — get their preferences instantly. No name, no history.
             </p>
 
             <div className="mt-10 flex gap-2">
@@ -106,12 +135,12 @@ function ScanInner() {
                 disabled={token.length !== 16}
                 className="px-5 py-3 bg-[var(--ink)] text-[var(--bg)] rounded-sm font-mono text-xs uppercase tracking-widest disabled:opacity-30 hover:bg-[var(--seal)] transition-all duration-300 cursor-pointer"
               >
-                Check
+                Verify
               </button>
             </div>
 
             <p className="mt-4 text-[10px] faint font-mono">
-              or scan QR from customer&apos;s pickless.ai/consent
+              or direct QR scan from customer&apos;s pickless.ai/consent
             </p>
           </div>
         )}
@@ -120,41 +149,66 @@ function ScanInner() {
           <div className="text-center">
             <div className="w-2 h-2 rounded-full bg-[var(--seal)] mx-auto pulse-soft" />
             <p className="mt-4 font-mono text-[10px] uppercase tracking-widest faint">
-              Verifying…
+              Verifying pass…
             </p>
           </div>
         )}
 
         {phase === "valid" && result && (
           <div className="w-full rise">
-            {/* Pass valid banner */}
-            <div className="flex items-center gap-3 mb-8 px-5 py-3 border border-green-700/30 bg-green-900/10 rounded-sm">
+            {/* Valid banner */}
+            <div className="flex items-center gap-3 mb-6 px-5 py-3 border border-green-700/30 bg-green-900/10 rounded-sm">
               <span className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
               <span className="font-mono text-[10px] uppercase tracking-widest text-green-400">
                 Valid pass · single use consumed
               </span>
             </div>
 
-            {/* Taste snapshot */}
+            {/* AI Suggestion — hero */}
+            <div className="mb-6 border hairline rounded-sm overflow-hidden bg-[var(--paper)]">
+              <div className="px-5 py-3 border-b hairline flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--seal)]" />
+                <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--seal)]">
+                  Pickless suggests
+                </span>
+              </div>
+              <div className="px-5 py-5">
+                {suggesting && !suggestion && (
+                  <div className="flex items-center gap-3">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[var(--seal)] pulse-soft" />
+                    <span className="font-mono text-[10px] uppercase tracking-widest faint">
+                      Thinking…
+                    </span>
+                  </div>
+                )}
+                {suggestion && (
+                  <div>
+                    <p className="font-display text-3xl tracking-tight leading-tight">
+                      {suggestion.dish}
+                    </p>
+                    <p className="mt-2 font-mono text-[10px] faint">
+                      {suggestion.reason}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Taste profile */}
             <div className="border hairline rounded-sm overflow-hidden">
               <div className="px-5 py-4 bg-[var(--paper)] border-b hairline flex items-center justify-between">
-                <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--seal)]">
-                  ● Customer taste profile
+                <span className="font-mono text-[9px] uppercase tracking-widest faint">
+                  Customer taste profile
                 </span>
                 <span className="font-mono text-[9px] faint uppercase tracking-widest">
                   {result.scope}
                 </span>
               </div>
 
-              <div className="p-5 space-y-5">
-                <div>
-                  <p className="font-mono text-[9px] uppercase tracking-widest faint mb-1.5">
-                    Archetype
-                  </p>
-                  <p className="text-sm leading-relaxed italic">
-                    &ldquo;{result.prefs.archetype}&rdquo;
-                  </p>
-                </div>
+              <div className="p-5 space-y-4">
+                <p className="text-sm leading-relaxed italic faint">
+                  &ldquo;{result.prefs.archetype}&rdquo;
+                </p>
 
                 {result.prefs.loves.length > 0 && (
                   <div>
@@ -192,7 +246,7 @@ function ScanInner() {
                   </div>
                 )}
 
-                <div className="flex items-baseline justify-between pt-2 border-t hairline">
+                <div className="flex items-baseline justify-between pt-3 border-t hairline">
                   <span className="font-mono text-[9px] uppercase tracking-widest faint">
                     Spend cap
                   </span>
@@ -208,7 +262,7 @@ function ScanInner() {
               onClick={reset}
               className="mt-6 w-full flex items-center justify-center gap-2 px-6 py-3 border hairline rounded-sm font-mono text-[10px] uppercase tracking-widest hover:bg-[var(--paper)] transition-colors"
             >
-              Verify another
+              Verify another pass
             </button>
           </div>
         )}

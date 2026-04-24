@@ -20,6 +20,7 @@ export async function POST(req: NextRequest) {
     preFetched,
     recentlyShown,
     loved,
+    skipped,
     userId,
   } = await req.json();
   const seed = Math.floor(Math.random() * 100000);
@@ -90,6 +91,17 @@ export async function POST(req: NextRequest) {
           .map((l: any) => `${l.dish} @ ${l.restaurant}`)
           .join(" | ")
       : "";
+  const skippedLine =
+    Array.isArray(skipped) && skipped.length > 0
+      ? skipped
+          .slice(0, 10)
+          .map((s: any) =>
+            s.reason
+              ? `${s.dish} @ ${s.restaurant} (${s.reason})`
+              : `${s.dish} @ ${s.restaurant}`,
+          )
+          .join(" | ")
+      : "";
 
   let whoopLine = "";
   if (typeof userId === "string" && /^[a-z0-9]{4,32}$/i.test(userId)) {
@@ -123,7 +135,7 @@ Stated prefs: ${prefsLine}
 Aggregate trend: ${trendLine}
 RECENTLY SHOWN OR ORDERED — NEVER repeat any of these:
 ${dontRepeat || "(none yet)"}
-${lovedLine ? `\nHEARTS (user explicitly loved these — STRONG positive signal, lean toward similar cuisine/style/restaurant, but don't literally repeat):\n${lovedLine}` : ""}${whoopLine ? `\n\n${whoopLine}\n(This is a TOP-2 directive — only mood overrides it. Pick should answer to the body state.)` : ""}
+${lovedLine ? `\nHEARTS (user explicitly loved these — STRONG positive signal, lean toward similar cuisine/style/restaurant, but don't literally repeat):\n${lovedLine}` : ""}${skippedLine ? `\nSKIPPED (user said no — NEGATIVE signal; avoid this dish+restaurant AND avoid the pattern the reason implies, e.g. "too heavy" → lighter this time, "wrong mood" → different vibe, "tried it recently" → fresh territory):\n${skippedLine}` : ""}${whoopLine ? `\n\n${whoopLine}\n(This is a TOP-2 directive — only mood overrides it. Pick should answer to the body state.)` : ""}
 
 Diversity seed: ${seed} (use this to break ties; pick differently than you would have last time)${tasteLine}
 

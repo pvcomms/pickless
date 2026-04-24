@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
     preFetched,
     recentlyShown,
     loved,
+    skipped,
     userId,
   } = await req.json();
 
@@ -81,6 +82,17 @@ export async function POST(req: NextRequest) {
           .map((l: any) => `${l.dish} @ ${l.restaurant}`)
           .join(" | ")
       : "";
+  const skippedLine =
+    Array.isArray(skipped) && skipped.length > 0
+      ? skipped
+          .slice(0, 10)
+          .map((s: any) =>
+            s.reason
+              ? `${s.dish} @ ${s.restaurant} (${s.reason})`
+              : `${s.dish} @ ${s.restaurant}`,
+          )
+          .join(" | ")
+      : "";
 
   let whoopLine = "";
   if (typeof userId === "string" && /^[a-z0-9]{4,32}$/i.test(userId)) {
@@ -125,7 +137,7 @@ Mood: ${mood || "—"}
 Stated prefs: ${prefsLine}
 Trend: ${trendLine}
 ${tasteLine}
-NEVER repeat (recently shown / ordered): ${dontRepeat || "(none)"}${lovedLine ? `\nHEARTS (user explicitly loved — strong positive signal; the "safe" pick especially should echo this taste, but don't literally repeat):\n${lovedLine}` : ""}${whoopLine ? `\n\n${whoopLine}\n(Treat this as a TOP-2 directive — only mood overrides it. The "smart" pick especially should answer to this body state.)` : ""}
+NEVER repeat (recently shown / ordered): ${dontRepeat || "(none)"}${lovedLine ? `\nHEARTS (user explicitly loved — strong positive signal; the "safe" pick especially should echo this taste, but don't literally repeat):\n${lovedLine}` : ""}${skippedLine ? `\nSKIPPED (user said no with reason — avoid both the pick and the reason-pattern; e.g. "too heavy" → lighter this round, "wrong mood" → different vibe):\n${skippedLine}` : ""}${whoopLine ? `\n\n${whoopLine}\n(Treat this as a TOP-2 directive — only mood overrides it. The "smart" pick especially should answer to this body state.)` : ""}
 Diversity seed: ${seed}
 
 == LIVE INVENTORY ==

@@ -3,6 +3,7 @@ import type { CloudSnapshot } from "@/app/api/sync/route";
 export type LocalSnapshot = {
   prefs?: any;
   loved?: any[];
+  skipped?: any[];
   tasteProfile?: any;
   history?: any[];
   recentlyShown?: any[];
@@ -57,6 +58,7 @@ export async function pushCloud(
 const KEYS = {
   prefs: "pickless_prefs",
   loved: "pickless_loved",
+  skipped: "pickless_skipped",
   tasteProfile: "pickless_taste_profile",
   history: "pickless_history",
   recentlyShown: "pickless_recently_shown",

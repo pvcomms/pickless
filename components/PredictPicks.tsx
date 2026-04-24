@@ -17,6 +17,7 @@ type Props = {
   liveRestaurants: any[];
   recentlyShown: { dish: string; restaurant: string }[];
   loved?: { dish: string; restaurant: string; price?: string }[];
+  skipped?: { dish: string; restaurant: string; reason?: string }[];
   lovedTick?: number;
   userId?: string;
   onPick: (pick: PredictPick) => void;
@@ -43,6 +44,7 @@ export function PredictPicks({
   liveRestaurants,
   recentlyShown,
   loved,
+  skipped,
   lovedTick,
   userId,
   onPick,
@@ -75,6 +77,7 @@ export function PredictPicks({
           preFetched: liveRestaurants.slice(0, 14),
           recentlyShown,
           loved,
+          skipped,
           userId,
         }),
       });

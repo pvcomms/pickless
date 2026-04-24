@@ -13,6 +13,8 @@ import { AutoOrderModal } from "@/components/AutoOrderModal";
 import { TasteSyncBadge } from "@/components/TasteSyncBadge";
 import { RecoveryBadge } from "@/components/RecoveryBadge";
 import { readLoved, toggleLoved, type LovedPick } from "@/lib/loved";
+import { readSkipped, recordSkip, type SkippedPick } from "@/lib/skipped";
+import { LovedPanel } from "@/components/LovedPanel";
 import { getUserId } from "@/lib/userId";
 import {
   pullCloud,
@@ -102,6 +104,12 @@ export default function FeedMe() {
   const [streakN, setStreakN] = useState(0);
   const [loved, setLoved] = useState<LovedPick[]>([]);
   const [lovedTick, setLovedTick] = useState(0);
+  const [skipped, setSkipped] = useState<SkippedPick[]>([]);
+  const [skipToast, setSkipToast] = useState<string | null>(null);
+  const [askSkipReason, setAskSkipReason] = useState<{
+    dish: string;
+    restaurant: string;
+  } | null>(null);
   const [userId, setUserIdState] = useState<string>("");
   const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const hydratedRef = useRef(false);
@@ -126,6 +134,7 @@ export default function FeedMe() {
     setStreakN(streak.read());
     setMuted(sfx.muted());
     setLoved(readLoved());
+    setSkipped(readSkipped());
 
     // Cloud sync: get/create anonymous ID, then pull remote snapshot.
     // If remote exists and is newer than local, hydrate state from it.
@@ -137,6 +146,7 @@ export default function FeedMe() {
         writeLocal(remote);
         if (remote.prefs) setPrefs(remote.prefs);
         if (Array.isArray(remote.loved)) setLoved(remote.loved);
+        if (Array.isArray(remote.skipped)) setSkipped(remote.skipped);
         if (remote.tasteProfile) setTasteProfile(remote.tasteProfile);
         if (Array.isArray(remote.history)) setHistory(remote.history);
         if (Array.isArray(remote.recentlyShown)) {
@@ -231,12 +241,13 @@ export default function FeedMe() {
     pushCloudDebounced(userId, {
       prefs,
       loved,
+      skipped,
       tasteProfile,
       history,
       recentlyShown: recentlyShownRef.current,
     });
     setSyncedAt(new Date().toISOString());
-  }, [userId, prefs, loved, tasteProfile, history, recentlyShown]);
+  }, [userId, prefs, loved, skipped, tasteProfile, history, recentlyShown]);
 
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -290,6 +301,7 @@ export default function FeedMe() {
           preFetched: liveRestaurants.slice(0, 18),
           recentlyShown: recentlyShownRef.current,
           loved,
+          skipped,
           userId,
         }),
       });
@@ -348,10 +360,31 @@ export default function FeedMe() {
     setOrderState("idle");
   }
 
-  function skip() {
+  function skip(reason?: string) {
+    if (rec?.dish && rec?.restaurant) {
+      const next = recordSkip({
+        dish: rec.dish,
+        restaurant: rec.restaurant,
+        cuisine: (rec.tags || []).join(", ") || undefined,
+        reason,
+      });
+      setSkipped(next);
+      setSkipToast(
+        reason
+          ? `noted · agent won't pitch ${reason.toLowerCase()} again`
+          : `skipped · agent will avoid similar`,
+      );
+      setTimeout(() => setSkipToast(null), 2400);
+    }
+    setAskSkipReason(null);
     setPhase("idle");
     setRec(null);
     setTimeout(feedMe, 100);
+  }
+
+  function skipWithPrompt() {
+    if (!rec) return;
+    setAskSkipReason({ dish: rec.dish, restaurant: rec.restaurant });
   }
 
   function updatePrefs(next: Preferences) {
@@ -526,9 +559,46 @@ export default function FeedMe() {
               liveRestaurants={liveRestaurants}
               recentlyShown={recentlyShown}
               loved={loved}
+              skipped={skipped}
               lovedTick={lovedTick}
               userId={userId}
               onPick={pickFromPrediction}
+            />
+
+            <LovedPanel
+              loved={loved}
+              onChange={(next) => {
+                setLoved(next);
+                setLovedTick((t) => t + 1);
+              }}
+              onReorder={(asRec) => {
+                setRec(asRec);
+                const next = [
+                  { dish: asRec.dish, restaurant: asRec.restaurant },
+                  ...recentlyShownRef.current,
+                ].slice(0, 20);
+                recentlyShownRef.current = next;
+                setRecentlyShown(next);
+                try {
+                  localStorage.setItem(
+                    "pickless_recently_shown",
+                    JSON.stringify(next),
+                  );
+                } catch {}
+                setPhase("revealed");
+                sfx.thunk();
+                setTimeout(() => sfx.bell(), 320);
+                const s = streak.bump();
+                setStreakN(s);
+                setTimeout(
+                  () =>
+                    cardRef.current?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    }),
+                  120,
+                );
+              }}
             />
 
             <p className="mt-10 font-mono text-[10px] uppercase tracking-widest faint">
@@ -926,13 +996,45 @@ export default function FeedMe() {
                 )}
               </button>
               <button
-                onClick={skip}
+                onClick={skipWithPrompt}
                 disabled={orderState === "placing"}
                 className="px-6 py-4 border hairline rounded-sm font-mono text-xs uppercase tracking-widest faint hover:text-[var(--ink)] transition-colors disabled:opacity-30"
               >
                 Skip
               </button>
             </div>
+
+            {askSkipReason && (
+              <div className="mt-5 max-w-md mx-auto rise">
+                <p className="font-mono text-[10px] uppercase tracking-widest faint mb-3">
+                  why not this? — one tap teaches the agent
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center">
+                  {[
+                    "too heavy",
+                    "too light",
+                    "wrong mood",
+                    "not hungry for this cuisine",
+                    "tried it recently",
+                    "too expensive",
+                  ].map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => skip(r)}
+                      className="font-mono text-[10px] uppercase tracking-widest px-3 py-2 border hairline rounded-sm faint hover:text-[var(--seal)] hover:border-[var(--seal)] transition-colors"
+                    >
+                      {r}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => skip()}
+                    className="font-mono text-[10px] uppercase tracking-widest px-3 py-2 rounded-sm faint hover:text-[var(--ink)] transition-colors"
+                  >
+                    just skip →
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -948,6 +1050,15 @@ export default function FeedMe() {
           onClose={() => setAutoOrderOpen(false)}
           onOrdered={autoOrderConfirmed}
         />
+      )}
+
+      {skipToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rise">
+          <div className="bg-[var(--ink)] text-[var(--bg)] px-5 py-3 rounded-sm font-mono text-[10px] uppercase tracking-widest flex items-center gap-3 shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
+            <span className="font-jp text-[var(--seal)] not-italic">✗</span>
+            {skipToast}
+          </div>
+        </div>
       )}
     </main>
   );
