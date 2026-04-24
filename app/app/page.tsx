@@ -92,6 +92,7 @@ export default function FeedMe() {
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [phase, setPhase] = useState<"idle" | "spinning" | "revealed">("idle");
+  const [feedError, setFeedError] = useState<string | null>(null);
   const [orderState, setOrderState] = useState<"idle" | "placing">("idle");
   const [autoOrderOpen, setAutoOrderOpen] = useState(false);
   const [meal, setMeal] = useState<MealItem[]>([]);
@@ -314,7 +315,14 @@ export default function FeedMe() {
   async function feedMe() {
     if (phase === "spinning") return;
     setRec(null);
+    setFeedError(null);
     setPhase("spinning");
+
+    const timeoutId = setTimeout(() => {
+      setPhase("idle");
+      setFeedError("Took too long — tap again.");
+    }, 15000);
+
     try {
       const res = await fetch("/api/recommend", {
         method: "POST",
@@ -338,7 +346,18 @@ export default function FeedMe() {
           userId,
         }),
       });
+      clearTimeout(timeoutId);
+      if (!res.ok) {
+        setPhase("idle");
+        setFeedError("Something went wrong — tap again.");
+        return;
+      }
       const data: Recommendation = await res.json();
+      if (!data?.dish) {
+        setPhase("idle");
+        setFeedError("Couldn't pick — tap again.");
+        return;
+      }
       setRec(data);
       // Track for next call so the agent doesn't repeat — sync via ref so the
       // very next feedMe call sees the latest list (state updates are async).
@@ -354,7 +373,9 @@ export default function FeedMe() {
         } catch {}
       }
     } catch {
+      clearTimeout(timeoutId);
       setPhase("idle");
+      setFeedError("Something went wrong — tap again.");
     }
   }
 
@@ -836,6 +857,11 @@ export default function FeedMe() {
             <p className="mt-10 font-mono text-[10px] uppercase tracking-widest faint">
               or — let the agent pick blind
             </p>
+            {feedError && (
+              <p className="mt-3 font-mono text-[10px] uppercase tracking-widest text-[var(--seal)]">
+                ● {feedError}
+              </p>
+            )}
             <button
               onClick={feedMe}
               className="mt-3 group inline-flex items-center gap-3 px-10 py-5 bg-[var(--ink)] text-[var(--bg)] rounded-sm font-mono text-xs uppercase tracking-widest hover:bg-[var(--seal)] transition-colors"

@@ -10,6 +10,8 @@ type Portable = {
   exportedBy: string;
   prefs: any;
   tasteProfile: any;
+  loves: any[];
+  pastPicks: any[];
   orders: any[];
   history: any[];
   location: {
@@ -38,6 +40,8 @@ function compose(): Portable {
     exportedBy: "pickless.ai",
     prefs: get("pickless_prefs"),
     tasteProfile: get("pickless_taste_profile"),
+    loves: get("pickless_loved") || [],
+    pastPicks: get("pickless_history") || [],
     orders: get("pickless_orders") || [],
     history: get("pickless_history") || [],
     location: {
@@ -57,10 +61,17 @@ function applyImport(p: Portable) {
       "pickless_taste_profile",
       JSON.stringify(p.tasteProfile),
     );
+  if (Array.isArray(p.loves) && p.loves.length)
+    localStorage.setItem("pickless_loved", JSON.stringify(p.loves));
+  const picks = Array.isArray(p.pastPicks)
+    ? p.pastPicks
+    : Array.isArray(p.history)
+      ? p.history
+      : [];
+  if (picks.length)
+    localStorage.setItem("pickless_history", JSON.stringify(picks));
   if (Array.isArray(p.orders) && p.orders.length)
     localStorage.setItem("pickless_orders", JSON.stringify(p.orders));
-  if (Array.isArray(p.history) && p.history.length)
-    localStorage.setItem("pickless_history", JSON.stringify(p.history));
   if (Array.isArray(p.connected) && p.connected.length)
     localStorage.setItem("pickless_connected", JSON.stringify(p.connected));
   if (p.location?.city) {
