@@ -10,6 +10,7 @@ import { PortableProfile } from "@/components/PortableProfile";
 import { PredictPicks } from "@/components/PredictPicks";
 import { InlinePrefs } from "@/components/InlinePrefs";
 import { AutoOrderModal } from "@/components/AutoOrderModal";
+import { MealCart, type MealItem } from "@/components/MealCart";
 import { TasteSyncBadge } from "@/components/TasteSyncBadge";
 import { RecoveryBadge } from "@/components/RecoveryBadge";
 import { readLoved, toggleLoved, type LovedPick } from "@/lib/loved";
@@ -93,6 +94,10 @@ export default function FeedMe() {
   const [phase, setPhase] = useState<"idle" | "spinning" | "revealed">("idle");
   const [orderState, setOrderState] = useState<"idle" | "placing">("idle");
   const [autoOrderOpen, setAutoOrderOpen] = useState(false);
+  const [meal, setMeal] = useState<MealItem[]>([]);
+  const [mealVibe, setMealVibe] = useState<string | null>(null);
+  const [mealOrderOpen, setMealOrderOpen] = useState(false);
+  const [buildingMeal, setBuildingMeal] = useState(false);
   const [liveRestaurants, setLiveRestaurants] = useState<any[]>([]);
   const [liveFetchedAt, setLiveFetchedAt] = useState<string | null>(null);
   const [mood, setMood] = useState<Mood | null>(null);
@@ -238,6 +243,11 @@ export default function FeedMe() {
   // Skip until hydration completes (otherwise empty state overwrites remote).
   useEffect(() => {
     if (!userId || !hydratedRef.current) return;
+    let savedAddress: string | undefined;
+    try {
+      const raw = localStorage.getItem("pickless_saved_address");
+      if (raw) savedAddress = JSON.parse(raw);
+    } catch {}
     pushCloudDebounced(userId, {
       prefs,
       loved,
@@ -245,6 +255,7 @@ export default function FeedMe() {
       tasteProfile,
       history,
       recentlyShown: recentlyShownRef.current,
+      ...(savedAddress ? { savedAddress } : {}),
     });
     setSyncedAt(new Date().toISOString());
   }, [userId, prefs, loved, skipped, tasteProfile, history, recentlyShown]);
@@ -275,6 +286,17 @@ export default function FeedMe() {
       const data = await r.json();
       setLocation(data);
       localStorage.setItem("pickless_location", JSON.stringify(data));
+      // Derive a human-readable delivery address string for the auto-order
+      // agent. Only write if no manual override is already saved.
+      if (!localStorage.getItem("pickless_saved_address")) {
+        const parts = [data.neighborhood, data.city].filter(Boolean);
+        if (parts.length) {
+          localStorage.setItem(
+            "pickless_saved_address",
+            JSON.stringify(parts.join(", ")),
+          );
+        }
+      }
     } catch {}
   }
 
@@ -358,6 +380,131 @@ export default function FeedMe() {
   function autoOrderConfirmed() {
     order();
     setOrderState("idle");
+  }
+
+  function addToMeal() {
+    if (!rec) return;
+    sfx.pop();
+    setMeal((m) => [
+      ...m,
+      {
+        dish: rec.dish,
+        restaurant: rec.restaurant,
+        orderUrl: rec.orderUrl,
+        price: rec.price,
+        platform: rec.platform,
+      },
+    ]);
+    // Track shown so the next pick differs
+    const next = [
+      { dish: rec.dish, restaurant: rec.restaurant },
+      ...recentlyShownRef.current,
+    ].slice(0, 20);
+    recentlyShownRef.current = next;
+    setRecentlyShown(next);
+    try {
+      localStorage.setItem("pickless_recently_shown", JSON.stringify(next));
+    } catch {}
+    // Go fetch the next one
+    setPhase("idle");
+    setRec(null);
+    setTimeout(feedMe, 100);
+  }
+
+  function removeFromMeal(idx: number) {
+    setMeal((m) => m.filter((_, i) => i !== idx));
+  }
+
+  function orderFullMeal() {
+    if (meal.length === 0) return;
+    setMealOrderOpen(true);
+  }
+
+  function mealOrderConfirmed() {
+    // Treat each meal item as a history entry — best-effort.
+    const items = meal.map((m) => ({
+      dish: m.dish,
+      restaurant: m.restaurant,
+      platform: m.platform,
+      price: m.price || "",
+      reason: "meal",
+      tags: ["meal"],
+      sponsored: false,
+      orderUrl: m.orderUrl,
+      orderedAt: new Date().toISOString(),
+    })) as HistoryItem[];
+    const nextHistory = [...items, ...history].slice(0, 30);
+    setHistory(nextHistory);
+    try {
+      localStorage.setItem("pickless_history", JSON.stringify(nextHistory));
+    } catch {}
+    setMeal([]);
+    setMealVibe(null);
+  }
+
+  async function buildMeal() {
+    if (buildingMeal) return;
+    setBuildingMeal(true);
+    setMeal([]);
+    setMealVibe(null);
+    try {
+      const res = await fetch("/api/recommend-meal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platforms,
+          history,
+          location,
+          prefs,
+          trends,
+          tasteProfile,
+          device,
+          weather,
+          warmth,
+          mood: mood ? `${mood.label} (${mood.bias})` : null,
+          context: timeCtx || { timeOfDay: timeOfDay() },
+          preFetched: liveRestaurants.slice(0, 18),
+          recentlyShown: recentlyShownRef.current,
+          loved,
+          skipped,
+          userId,
+        }),
+      });
+      const data = await res.json();
+      if (data.drink && data.main && data.dessert) {
+        setMeal([
+          {
+            dish: data.drink.dish,
+            restaurant: data.drink.restaurant,
+            orderUrl: data.drink.orderUrl,
+            price: data.drink.price,
+            platform: data.drink.platform,
+          },
+          {
+            dish: data.main.dish,
+            restaurant: data.main.restaurant,
+            orderUrl: data.main.orderUrl,
+            price: data.main.price,
+            platform: data.main.platform,
+          },
+          {
+            dish: data.dessert.dish,
+            restaurant: data.dessert.restaurant,
+            orderUrl: data.dessert.orderUrl,
+            price: data.dessert.price,
+            platform: data.dessert.platform,
+          },
+        ]);
+        if (data.vibe) setMealVibe(data.vibe);
+        sfx.bell();
+      }
+    } catch {}
+    setBuildingMeal(false);
+  }
+
+  function clearMeal() {
+    setMeal([]);
+    setMealVibe(null);
   }
 
   function skip(reason?: string) {
@@ -610,6 +757,21 @@ export default function FeedMe() {
             >
               Feed me
               <span className="font-jp">食</span>
+            </button>
+
+            <button
+              onClick={buildMeal}
+              disabled={buildingMeal}
+              className="mt-2 font-mono text-[10px] uppercase tracking-widest faint hover:text-[var(--seal)] transition-colors flex items-center gap-2 disabled:opacity-50"
+            >
+              {buildingMeal ? (
+                <>
+                  <span className="inline-block w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
+                  building your meal…
+                </>
+              ) : (
+                "or build me a full meal →"
+              )}
             </button>
 
             {/* Live map */}
@@ -980,7 +1142,23 @@ export default function FeedMe() {
               })}
             </div>
 
-            <div className="mt-8 flex gap-3 justify-center">
+            {meal.length > 0 && (
+              <div className="mt-6 flex items-center justify-center gap-2 flex-wrap">
+                <span className="font-mono text-[9px] uppercase tracking-widest faint">
+                  Meal so far →
+                </span>
+                {meal.map((m, i) => (
+                  <span
+                    key={i}
+                    className="font-mono text-[9px] uppercase tracking-widest px-2 py-1 border border-[var(--seal)] text-[var(--seal)] rounded-sm"
+                  >
+                    {m.dish.split(" ").slice(0, 3).join(" ")}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-6 flex gap-3 justify-center flex-wrap">
               <button
                 onClick={autoOrder}
                 disabled={orderState === "placing"}
@@ -995,6 +1173,23 @@ export default function FeedMe() {
                   <>Order it for me →</>
                 )}
               </button>
+              {meal.length < 3 && (
+                <button
+                  onClick={addToMeal}
+                  disabled={orderState === "placing"}
+                  className="px-6 py-4 border hairline rounded-sm font-mono text-xs uppercase tracking-widest hover:text-[var(--seal)] hover:border-[var(--seal)] transition-colors disabled:opacity-30 flex items-center gap-2"
+                  title="Save this for the meal — pick another dish next"
+                >
+                  <span className="font-jp text-base text-[var(--seal)] leading-none">
+                    膳
+                  </span>
+                  {meal.length === 0
+                    ? "+ Add to meal"
+                    : meal.length === 1
+                      ? "+ Add main"
+                      : "+ Add dessert"}
+                </button>
+              )}
               <button
                 onClick={skipWithPrompt}
                 disabled={orderState === "placing"}
@@ -1049,6 +1244,37 @@ export default function FeedMe() {
           orderUrl={rec.orderUrl}
           onClose={() => setAutoOrderOpen(false)}
           onOrdered={autoOrderConfirmed}
+        />
+      )}
+
+      {/* Meal cart — pinned bottom-right when meal in progress */}
+      {meal.length > 0 && phase !== "spinning" && (
+        <MealCart
+          items={meal}
+          vibe={mealVibe}
+          onRemove={removeFromMeal}
+          onOrder={orderFullMeal}
+          onClear={() => {
+            setMeal([]);
+            setMealVibe(null);
+          }}
+        />
+      )}
+
+      {/* Modal for the multi-item meal flow */}
+      {meal.length > 0 && (
+        <AutoOrderModal
+          open={mealOrderOpen}
+          userId={userId}
+          platform={meal[0].platform}
+          items={meal.map((m) => ({
+            dish: m.dish,
+            restaurant: m.restaurant,
+            orderUrl: m.orderUrl,
+            price: m.price,
+          }))}
+          onClose={() => setMealOrderOpen(false)}
+          onOrdered={mealOrderConfirmed}
         />
       )}
 

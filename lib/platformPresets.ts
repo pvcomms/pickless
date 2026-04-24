@@ -16,6 +16,9 @@ export type PlatformPreset = {
   // Optional first-touch nav hints — e.g. accept Swiggy's location prompt with
   // the detected GPS coords, or close the "open in app" banner.
   preflight?: string;
+  // Called when the user's saved address is known — types it into address
+  // search fields so the agent never blocks waiting for the user to enter it.
+  addressAct?: (savedAddress: string) => string;
 };
 
 const SWIGGY: PlatformPreset = {
@@ -23,6 +26,8 @@ const SWIGGY: PlatformPreset = {
   label: "Swiggy",
   preflight:
     'on Swiggy, if there is an "Open in App" / "Continue to Web" banner, choose "Continue on Web". If a location selector asks for an address, accept the detected location or close the modal. If a "Sign In" or login prompt overlays the page, close it (do not log in — that\'s the user\'s job).',
+  addressAct: (addr) =>
+    `on Swiggy, look for any address / location input field on the page (a search box asking "Enter your delivery location" or similar). If you see one, click it, clear any existing text, type "${addr}", wait for autocomplete suggestions to appear, then click the first suggestion that matches. If no address field is visible, do nothing.`,
   blockerDismiss:
     'close any blocking modal on Swiggy: cookie consent, "Open in App" banner, location prompt, login nag, or first-time tutorial. Do NOT log in. Do NOT change the address. Just close/dismiss/skip whatever is in the way of the menu.',
   search: (dish) =>
@@ -40,6 +45,8 @@ const ZOMATO: PlatformPreset = {
   label: "Zomato",
   preflight:
     'on Zomato, if there is a "Login / Sign Up" overlay covering the page, close it. If a location modal asks "Where would you like to order?", accept the detected location.',
+  addressAct: (addr) =>
+    `on Zomato, look for any address / delivery location input field (a search box asking "Where would you like to order?" or similar). If visible, click it, type "${addr}", wait for suggestions, and select the best match. If no address field is visible, do nothing.`,
   blockerDismiss:
     "dismiss any blocking overlay on Zomato: login prompt, location confirm, cookie banner, app-download nag. Do NOT sign in. Do NOT change the delivery address.",
   search: (dish) =>

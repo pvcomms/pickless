@@ -106,6 +106,18 @@ export async function POST(req: NextRequest) {
       } catch {}
     }
 
+    // If the user has a saved delivery address, try to fill it into any address
+    // prompt before we hit the menu. This is the #1 manual-takeover trigger.
+    if (preset.addressAct && job.savedAddress) {
+      await appendStep(sessionId, {
+        kind: "act",
+        msg: `filling delivery address: ${job.savedAddress}`,
+      });
+      try {
+        await stagehand.act(preset.addressAct(job.savedAddress));
+      } catch {}
+    }
+
     // First scan-for-blockers — also one-shot per session.
     await appendStep(
       sessionId,

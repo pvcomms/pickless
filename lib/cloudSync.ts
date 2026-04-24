@@ -7,6 +7,7 @@ export type LocalSnapshot = {
   tasteProfile?: any;
   history?: any[];
   recentlyShown?: any[];
+  savedAddress?: string;
 };
 
 export async function pullCloud(userId: string): Promise<CloudSnapshot | null> {
@@ -62,6 +63,7 @@ const KEYS = {
   tasteProfile: "pickless_taste_profile",
   history: "pickless_history",
   recentlyShown: "pickless_recently_shown",
+  savedAddress: "pickless_saved_address",
 } as const;
 
 export function readLocal(): LocalSnapshot {

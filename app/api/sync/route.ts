@@ -8,6 +8,7 @@ export type CloudSnapshot = {
   tasteProfile?: any;
   history?: any[];
   recentlyShown?: any[];
+  savedAddress?: string;
   updatedAt: string;
 };
 
@@ -55,6 +56,10 @@ export async function POST(req: NextRequest) {
     recentlyShown: Array.isArray(body.recentlyShown)
       ? body.recentlyShown.slice(0, 30)
       : undefined,
+    savedAddress:
+      typeof body.savedAddress === "string" && body.savedAddress.trim()
+        ? body.savedAddress.trim().slice(0, 200)
+        : undefined,
     updatedAt: new Date().toISOString(),
   };
   try {

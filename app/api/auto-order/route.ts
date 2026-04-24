@@ -19,6 +19,10 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "bad body" }, { status: 400 });
   const { platform, userId } = body;
+  const savedAddress: string | undefined =
+    typeof body.savedAddress === "string" && body.savedAddress.trim()
+      ? body.savedAddress.trim()
+      : undefined;
 
   // Normalize input: accept items[] (new multi-dish), or single dish/restaurant
   // (legacy single). items[0] is what the live view first navigates to.
@@ -148,6 +152,7 @@ export async function POST(req: NextRequest) {
       platform,
       orderUrl,
       items,
+      ...(savedAddress ? { savedAddress } : {}),
       status: "starting",
       steps: [
         {
