@@ -4,8 +4,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Hanko } from "@/components/Hanko";
 import { LiveMap } from "@/components/LiveMap";
-import { ReelSpin } from "@/components/ReelSpin";
-import { SpinningInsights } from "@/components/SpinningInsights";
 import { PortableProfile } from "@/components/PortableProfile";
 import { PredictPicks } from "@/components/PredictPicks";
 import { InlinePrefs } from "@/components/InlinePrefs";
@@ -45,29 +43,6 @@ import {
 } from "@/lib/context";
 
 type HistoryItem = Recommendation & { orderedAt: string };
-
-const SAMPLE_DISHES = [
-  "thali",
-  "khichdi",
-  "biryani",
-  "tikka",
-  "ramen",
-  "sushi",
-  "tacos",
-  "pho",
-  "burger",
-  "pasta",
-  "salad",
-  "curry",
-  "kebab",
-  "noodles",
-  "wrap",
-  "bowl",
-  "vada pav",
-  "dosa",
-  "maggi",
-  "roll",
-];
 
 function timeOfDay() {
   const h = new Date().getHours();
@@ -361,8 +336,6 @@ export default function FeedMe() {
         return;
       }
       setRec(data);
-      // Track for next call so the agent doesn't repeat — sync via ref so the
-      // very next feedMe call sees the latest list (state updates are async).
       if (data?.dish && data?.restaurant) {
         const next = [
           { dish: data.dish, restaurant: data.restaurant },
@@ -374,6 +347,7 @@ export default function FeedMe() {
           localStorage.setItem("pickless_recently_shown", JSON.stringify(next));
         } catch {}
       }
+      onReelDone();
     } catch {
       clearTimeout(timeoutId);
       setPhase("idle");
@@ -1165,35 +1139,11 @@ export default function FeedMe() {
         )}
 
         {phase === "spinning" && (
-          <div className="rise w-full">
-            <p className="font-mono text-[10px] uppercase tracking-widest faint mb-6">
-              The agent is choosing
+          <div className="rise w-full flex flex-col items-center gap-8">
+            <span className="w-2 h-2 rounded-full bg-[var(--seal)] pulse-soft inline-block" />
+            <p className="font-display text-3xl sm:text-4xl tracking-tight faint">
+              choosing…
             </p>
-            <ReelSpin
-              spinning={true}
-              finalText={rec?.dish || null}
-              pool={
-                liveRestaurants.length > 0
-                  ? Array.from(
-                      new Set(
-                        liveRestaurants.flatMap((r: any) =>
-                          (r.cuisines || []).slice(0, 2),
-                        ),
-                      ),
-                    )
-                  : SAMPLE_DISHES
-              }
-              onDone={onReelDone}
-            />
-            <SpinningInsights
-              orders={orders}
-              trends={trends}
-              tasteProfile={tasteProfile}
-              weather={weather}
-              location={location}
-              mood={mood}
-              prefs={prefs}
-            />
           </div>
         )}
 
